@@ -6,7 +6,7 @@ Embeddable chatbot SDK for [Onedesk Pro](https://onedeskpro.com). A framework-in
 
 | Package | Description |
 | --- | --- |
-| [`@onedeskpro/chatbot-core`](packages/core) | Chat engine, session manager, API client, and a self-contained widget. Works anywhere, including via script tag. |
+| [`@onedeskpro/chatbot-core`](packages/core) | Chat engine, visitor identification, AI-to-human handoff, API and socket clients, and a self-contained widget. Works anywhere, including via script tag. |
 | [`@onedeskpro/chatbot-react`](packages/react) | `ChatbotProvider`, `ChatbotWidget`, and the `useChatbot` hook. |
 | [`@onedeskpro/chatbot-types`](packages/shared-types) | Shared TypeScript types. Types only, no runtime. |
 
@@ -40,7 +40,7 @@ const chatbot = new ChatbotCore();
 await chatbot.init({ apiKey: 'your-onedesk-pro-api-key' });
 ```
 
-See each package README for the full API.
+The widget asks each new visitor for a name and phone number before the chat opens, and lets them hand the conversation to a human agent. See each package README for the full API, and for what a custom UI has to do to cover those two steps.
 
 ## Development
 
@@ -106,7 +106,7 @@ Two areas are worth keeping honest as the SDK grows:
 Versions are kept in lockstep across the three packages. To cut a release:
 
 ```bash
-pnpm release:version 0.2.0   # bump all three packages
+pnpm release:version 0.3.0   # bump all three packages
 pnpm build
 pnpm release                 # publish to npm
 ```
