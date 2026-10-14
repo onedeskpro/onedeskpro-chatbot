@@ -61,6 +61,25 @@ test.describe('chat widget', () => {
     await expect(panel).toBeVisible();
     await expect(panel.getByRole('button', { name: /Start Chatting/ })).toBeVisible();
   });
+
+  test('should not show the launcher when the agent cannot reply yet', async ({ page }) => {
+    // Arrange: registered after mockApi, so this config reply wins.
+    await mockApi(page);
+    await page.route('**/sdk/config', (route) =>
+      fulfillJson(route, { agentId: 'e2e-agent', agentName: 'E2E Bot', ready: false, blockReason: 'no-credits' }),
+    );
+    await openShadowRoots(page);
+    const configChecked = page.waitForResponse(
+      (response) => response.url().endsWith('/sdk/config') && response.request().method() === 'GET',
+    );
+
+    // Act
+    await page.goto('/');
+    await configChecked;
+
+    // Assert
+    await expect(page.getByRole('button', { name: 'Open chat' })).toHaveCount(0);
+  });
 });
 
 test.describe('headless chat', () => {

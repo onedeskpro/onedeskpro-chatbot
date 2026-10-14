@@ -81,7 +81,25 @@ export interface ChatMessage {
 
 // ─── Readiness ────────────────────────────────────────────────────────────────
 
-export type ChatbotBlockReason = 'no-prompt' | 'no-collections' | 'no-directories' | 'no-agent' | null;
+/**
+ * Why the chatbot cannot answer, or `null` when it can. The widget stays hidden
+ * while this is set.
+ * - `no-prompt`, `no-collections`: the agent is not set up yet (from the API).
+ * - `ai-unavailable`: the platform's AI models are not configured (from the API).
+ * - `no-credits`: the workspace has used its AI token budget (from the API).
+ * - `no-agent`: no agent is assigned to the Website channel.
+ * - `server-unavailable`: the API could not be reached; the SDK retries a few times.
+ * - `no-directories`: legacy name for `no-collections`.
+ */
+export type ChatbotBlockReason =
+  | 'no-prompt'
+  | 'no-collections'
+  | 'no-directories'
+  | 'ai-unavailable'
+  | 'no-credits'
+  | 'no-agent'
+  | 'server-unavailable'
+  | null;
 
 export interface SdkConfigResponse {
   agentId: string;

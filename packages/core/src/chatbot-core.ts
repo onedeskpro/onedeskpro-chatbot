@@ -42,6 +42,27 @@ function definedOnly(options: ChatbotInitOptions): Partial<ChatbotInitOptions> {
   ) as Partial<ChatbotInitOptions>;
 }
 
+/**
+ * Waits before each new readiness check while the server is unreachable. Bounded,
+ * so a page left open during an outage stops calling once the list runs out.
+ */
+export const READINESS_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 30_000, 60_000];
+
+/**
+ * True when `/sdk/config` failed because the server could not be reached or is
+ * failing (network error, timeout, a 5xx, or an unreadable reply), rather than
+ * because it rejected this site.
+ */
+function isServerUnavailable(error: unknown): boolean {
+  if (!isChatbotRequestError(error)) return false;
+  return error.status === 0 || error.status >= 500 || error.apiError.code === 'BAD_RESPONSE';
+}
+
+function errorMessage(error: unknown): string {
+  if (isChatbotRequestError(error)) return error.apiError.message;
+  return error instanceof Error ? error.message : 'Failed to load chatbot config.';
+}
+
 /** Monotonic ids for locally-created messages — `Date.now()` collides within a tick. */
 let nextLocalId = 0;
 const localMessageId = (): number => Date.now() * 1000 + (nextLocalId++ % 1000);
@@ -100,6 +121,8 @@ export class ChatbotCore {
    * before a ticket exists.
    */
   private hasActiveTicket = false;
+  /** Pending readiness re-check while the server is unreachable. */
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   /** Server id of the last `message:receive` push rendered as an agent bubble. */
   private lastPushId: string | null = null;
   /**
@@ -170,6 +193,7 @@ export class ChatbotCore {
     const token = ++this.initToken;
 
     // Re-initialising must not orphan the previous widget in the DOM.
+    this.clearRetry();
     this.disconnectSdkSocket();
     this.widget?.destroy();
     this.widget = null;
@@ -185,6 +209,8 @@ export class ChatbotCore {
 
     this.hasActiveTicket = false;
     this.setState({
+      isReady: false,
+      blockReason: null,
       visitorToken: null,
       visitorName: null,
       needsIdentify: true,
@@ -193,85 +219,97 @@ export class ChatbotCore {
       mode: 'ai',
     });
 
-    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-      this.widget = new ChatWidget(this.options, {
-        onSend: (text) => void this.sendMessage(text),
-        onIdentify: (payload) => void this.submitIdentify(payload),
-        onOpen: () => {
-          this.setState({ isOpen: true });
-          this.emitter.emit('open');
-        },
-        onClose: () => {
-          this.setState({ isOpen: false });
-          this.emitter.emit('close');
-        },
-        onReset: () => this.resetSession(),
-        onRequestHuman: () => void this.requestHuman(),
-      });
-    }
+    // Nothing goes on the page yet: the widget appears only once the server has
+    // answered and the agent can reply (see checkReadiness).
+    await this.checkReadiness(token, 0);
+  }
 
-    let config: SdkConfigResponse | null = null;
-    let configError: unknown = null;
+  /**
+   * Asks `/sdk/config` whether the server is up and the agent can reply, and
+   * shows the widget only when both hold. An unreachable server is retried on
+   * READINESS_RETRY_DELAYS_MS; a configuration problem is final for this page.
+   * `ready` fires once the outcome is settled either way.
+   */
+  private async checkReadiness(token: number, attempt: number): Promise<void> {
+    let config: SdkConfigResponse;
     try {
       config = await this.apiClient.fetchConfig();
     } catch (error) {
-      configError = error;
+      if (token !== this.initToken) return;
+      if (isServerUnavailable(error)) {
+        this.setState({ isReady: false, blockReason: 'server-unavailable', error: errorMessage(error) });
+        const delay = READINESS_RETRY_DELAYS_MS[attempt];
+        if (delay !== undefined) {
+          this.retryTimer = setTimeout(() => {
+            this.retryTimer = null;
+            void this.checkReadiness(token, attempt + 1);
+          }, delay);
+          return;
+        }
+      } else {
+        this.handleConfigError(error);
+      }
+      this.emitter.emit('ready');
+      return;
     }
     if (token !== this.initToken) return;
-
-    if (configError) {
-      this.handleConfigError(configError);
-      this.emitter.emit('ready');
-      return;
-    }
-
-    if (!config) {
-      this.emitter.emit('ready');
-      return;
-    }
 
     if (!this.callerSetName && config.agentName.trim()) {
       this.options.chatbotName = config.agentName;
     }
     const blockReason = config.blockReason ?? null;
-    this.setState({ blockReason, isReady: blockReason === null, error: null });
-
-    if (blockReason) {
-      this.widget?.showBlocked(blockReason);
-    } else {
-      this.visitorTokens.setScope(config.agentId);
-      await this.resolveVisitorGate(token);
-      if (token !== this.initToken) return;
+    const isReady = config.ready && blockReason === null;
+    this.setState({ blockReason, isReady, error: null });
+    if (!isReady) {
+      this.emitter.emit('ready');
+      return;
     }
 
+    this.mountWidget();
+    this.visitorTokens.setScope(config.agentId);
+    await this.resolveVisitorGate(token);
+    if (token !== this.initToken) return;
+
+    // Reveal only now, so the visitor never sees a launcher that opens onto a
+    // loading panel or a check that is still running.
+    this.widget?.reveal();
     this.emitter.emit('ready');
   }
 
+  /** Creates the widget hidden; checkReadiness reveals it once every check passed. */
+  private mountWidget(): void {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    this.widget = new ChatWidget(this.options, {
+      onSend: (text) => void this.sendMessage(text),
+      onIdentify: (payload) => void this.submitIdentify(payload),
+      onOpen: () => {
+        this.setState({ isOpen: true });
+        this.emitter.emit('open');
+      },
+      onClose: () => {
+        this.setState({ isOpen: false });
+        this.emitter.emit('close');
+      },
+      onReset: () => this.resetSession(),
+      onRequestHuman: () => void this.requestHuman(),
+    });
+  }
+
+  private clearRetry(): void {
+    if (this.retryTimer === null) return;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+  }
+
   /**
-   * Maps `/sdk/config` failures: missing Connected Channels becomes `no-agent`,
-   * other 403s show the API message, and 401/network stay as `state.error`.
+   * Maps `/sdk/config` rejections other than an unreachable server: missing
+   * Connected Channels becomes `no-agent`; anything else (an invalid key, a
+   * disallowed origin) is recorded as `state.error`.
    */
   private handleConfigError(error: unknown): void {
     const requestError = isChatbotRequestError(error) ? error : null;
-    const message =
-      requestError?.apiError.message ??
-      (error instanceof Error ? error.message : 'Failed to load chatbot config.');
-    const code = requestError?.apiError.code;
-    const status = requestError?.status;
-
-    if (code === 'agent_not_assigned') {
-      this.setState({ isReady: false, blockReason: 'no-agent', error: message });
-      this.widget?.showBlocked('no-agent');
-      return;
-    }
-
-    if (status === 403) {
-      this.setState({ isReady: false, blockReason: null, error: message });
-      this.widget?.showBlocked(null, message);
-      return;
-    }
-
-    this.setState({ isReady: false, blockReason: null, error: message });
+    const blockReason = requestError?.apiError.code === 'agent_not_assigned' ? 'no-agent' : null;
+    this.setState({ isReady: false, blockReason, error: errorMessage(error) });
   }
 
   private async resolveVisitorGate(token: number): Promise<void> {
@@ -565,6 +603,7 @@ export class ChatbotCore {
    */
   destroy(): void {
     this.initToken++;
+    this.clearRetry();
     this.disconnectSdkSocket();
     this.widget?.destroy();
     this.widget = null;

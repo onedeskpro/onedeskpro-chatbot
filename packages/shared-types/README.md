@@ -20,7 +20,7 @@ npm install --save-dev @onedeskpro/chatbot-types
 | `ChatbotEventMap` | Event names mapped to payloads, including `state-change`, `ticket-status`, and `human-requested`. |
 | `ChatbotTicketMode` | Who owns the conversation (`'ai' \| 'waiting' \| 'human' \| 'closed'`). |
 | `TicketStatusData` | Mode plus optional `conversationId` and `agentName`. Shared by the human-request and ticket-status endpoints and the `ticket:status` socket event. |
-| `ChatbotBlockReason` | Why a bot is not ready (`'no-prompt' \| 'no-collections' \| 'no-directories' \| 'no-agent' \| null`). |
+| `ChatbotBlockReason` | Why a bot is not ready, or `null`: `'no-prompt'`, `'no-collections'`, `'ai-unavailable'`, `'no-credits'`, `'no-agent'`, `'server-unavailable'`, or the legacy `'no-directories'`. |
 | `SdkConfigResponse` | Remote agent configuration and readiness. |
 | `IdentifyRequest` / `IdentifyResponseData` | Identify endpoint request and response bodies. |
 | `VisitorVerifyResponse` | Result of verifying a stored visitor token. |

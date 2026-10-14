@@ -223,21 +223,6 @@ export function buildStyles(primaryColor: string, theme: 'light' | 'dark' | 'aut
     }
     @keyframes ttcb-spin { to { transform: rotate(360deg); } }
 
-    .ttcb-blocked {
-      display: flex; flex-direction: column; align-items: center;
-      justify-content: center; text-align: center;
-      padding: 32px 20px; flex: 1;
-    }
-    .ttcb-blocked-icon {
-      width: 44px; height: 44px; border-radius: 50%;
-      background: var(--ttcb-bg-secondary);
-      display: flex; align-items: center; justify-content: center;
-      margin-bottom: 14px;
-    }
-    .ttcb-blocked-icon svg { width: 20px; height: 20px; fill: var(--ttcb-text-muted); }
-    .ttcb-blocked-title { font-size: 14px; font-weight: 600; color: var(--ttcb-text); margin-bottom: 8px; }
-    .ttcb-blocked-desc { font-size: 12px; color: var(--ttcb-text-muted); line-height: 1.5; max-width: 220px; }
-
     .ttcb-msg { display: flex; gap: 8px; max-width: 100%; }
     .ttcb-msg.human { flex-direction: row-reverse; }
     .ttcb-msg-body { display: flex; flex-direction: column; gap: 3px; max-width: 78%; }

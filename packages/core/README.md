@@ -28,7 +28,23 @@ await chatbot.init({
 });
 ```
 
-`init` mounts the widget and connects to the Onedesk Pro API. Only `apiKey` is required — use the publishable workspace API key, never a server secret.
+`init` connects to the Onedesk Pro API and adds the widget to the page once the agent can reply. Only `apiKey` is required — use the publishable workspace API key, never a server secret.
+
+### When the widget appears
+
+Nothing is added to the page straight away. `init` first checks that the Onedesk Pro server is reachable and that the agent is ready to reply, and the launcher appears only once both hold and a returning visitor's identity has been checked:
+
+| Situation | `blockReason` | What happens |
+| --- | --- | --- |
+| Ready | `null` | The launcher appears (and the panel opens, with `autoOpen`). |
+| The server cannot be reached, times out, or answers with a 5xx | `server-unavailable` | Stays hidden and checks again after 5, 15, 30 and 60 seconds, then gives up until the next page load. |
+| The agent has no system prompt or no knowledge base | `no-prompt`, `no-collections` | Stays hidden. |
+| The platform's AI models are not configured | `ai-unavailable` | Stays hidden. |
+| The workspace has used its AI token budget | `no-credits` | Stays hidden. |
+| No agent is assigned to the Website channel | `no-agent` | Stays hidden. |
+| The API key is rejected or the site's origin is not allowed | `null`, with `error` set | Stays hidden. |
+
+`init` resolves after the first check, and the `ready` event fires once the outcome is settled: when the widget appears, when a configuration problem rules it out, or when the last retry fails. A custom UI built on the state can show `blockReason` to explain why chat is unavailable.
 
 ### Visitor identification
 
@@ -111,9 +127,9 @@ The IIFE build exposes a `window.OnedeskProChatbot` global:
 | --- | --- | --- |
 | `isOpen` | `boolean` | The panel is showing. |
 | `isLoading` | `boolean` | A send, identify, or human request is in flight. |
-| `isReady` | `boolean` | Config loaded and the agent can answer. |
+| `isReady` | `boolean` | The server answered and the agent can reply; the widget is on the page. |
 | `needsIdentify` | `boolean` | The visitor has not identified yet. |
-| `blockReason` | `ChatbotBlockReason` | Why the agent cannot answer, or `null`. |
+| `blockReason` | `ChatbotBlockReason` | Why the agent cannot answer, or `null`. See [When the widget appears](#when-the-widget-appears). |
 | `messages` | `ChatMessage[]` | The conversation so far. `message.type` is `'human'`, `'ai'`, or `'agent'`. |
 | `visitorToken` | `string \| null` | The identified visitor's token. |
 | `visitorName` | `string \| null` | The identified visitor's name. |
@@ -126,7 +142,7 @@ The IIFE build exposes a `window.OnedeskProChatbot` global:
 | --- | --- | --- |
 | `message` | `ChatMessage` | A message is added — visitor, AI, and human agent alike. |
 | `state-change` | `ChatbotState` | Any state changes, including `isLoading` while a reply is in flight. |
-| `ready` | — | Init finished and readiness has been checked. |
+| `ready` | — | The readiness check settled: the widget appeared, or it will not (see `blockReason` and `error`). |
 | `open` / `close` | — | The panel is shown or hidden. |
 | `ticket-status` | `TicketStatusData` | The mode changed — on restore, after a send, or pushed live. |
 | `human-requested` | — | `requestHuman()` succeeded. |

@@ -29,7 +29,7 @@ export default function App() {
 
 `ChatbotProvider` accepts every `ChatbotInitOptions` field as a prop — `apiKey`, `apiBaseUrl`, `chatbotName`, `primaryColor`, `theme`, `position`, `welcomeMessage`, `placeholder`, `autoOpen`, `requestTimeoutMs`. Only `apiKey` is required. The `sessionId` prop is deprecated and ignored.
 
-`ChatbotWidget` handles the whole flow itself: it asks a new visitor for their name and phone number before the chat opens, and shows the controls and banners for handing a conversation to a human agent.
+`ChatbotWidget` appears only once the Onedesk Pro server is reachable and the agent can reply; until then nothing is shown and `blockReason` says why. It handles the whole flow itself: it asks a new visitor for their name and phone number before the chat opens, and shows the controls and banners for handing a conversation to a human agent.
 
 The components are client-side; in Next.js App Router they carry `'use client'` already, so importing them from a server component is fine as long as the provider itself renders on the client.
 
@@ -94,7 +94,7 @@ function SupportPanel() {
 | `needsIdentify` | `true` until the visitor has identified. `sendMessage` rejects while it is. |
 | `visitorToken`, `visitorName` | The identified visitor, or `null`. |
 | `mode` | `'ai'`, `'waiting'`, `'human'`, or `'closed'`. |
-| `blockReason`, `error` | Why the agent cannot answer, and the last error message. |
+| `blockReason`, `error` | Why the agent cannot answer (for example `server-unavailable` or `no-credits`), and the last error message. |
 | `submitIdentify({ name, phone, email? })` | Identifies the visitor and unlocks the chat. |
 | `sendMessage(text)` | Sends a message. |
 | `requestHuman()` | Escalates to a human agent. Does nothing unless `mode` is `'ai'` and a conversation has started. |

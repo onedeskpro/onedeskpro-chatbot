@@ -1,6 +1,5 @@
 import type {
   ChatMessage,
-  ChatbotBlockReason,
   ChatbotInitOptions,
   ChatbotTicketMode,
   IdentifyRequest,
@@ -21,12 +20,10 @@ import {
   chevronDownIcon,
   closeIcon,
   envelopeIcon,
-  fileTextIcon,
   newSessionIcon,
   personIcon,
   requestHumanIcon,
   sendIcon,
-  settingsIcon,
   shieldCheckIcon,
   starsIcon,
   verifiedCheckIcon,
@@ -70,6 +67,7 @@ export class ChatWidget {
   private selectedCountry: DialCountry = DEFAULT_DIAL_COUNTRY;
   private countryOpen = false;
   private isOpen = false;
+  private autoOpen: boolean;
   private destroyed = false;
   private position: string;
   private callbacks: WidgetCallbacks;
@@ -77,12 +75,15 @@ export class ChatWidget {
   constructor(options: ChatbotInitOptions, callbacks: WidgetCallbacks) {
     this.position = options.position ?? 'bottom-right';
     this.callbacks = callbacks;
+    this.autoOpen = options.autoOpen === true;
     this.mount(options);
   }
 
   private mount(options: ChatbotInitOptions): void {
     this.host = document.createElement('div');
     this.host.id = 'onedeskpro-chatbot-host';
+    // Hidden until ChatbotCore has confirmed the agent can reply; see reveal().
+    this.host.style.display = 'none';
     this.shadow = this.host.attachShadow({ mode: 'closed' });
 
     const styleEl = document.createElement('style');
@@ -165,8 +166,12 @@ export class ChatWidget {
 
     this.attachToDocument();
     this.showInitialLoading();
+  }
 
-    if (options.autoOpen) this.open();
+  /** Shows the launcher (and the panel, with `autoOpen`) once every readiness check passed. */
+  reveal(): void {
+    this.host.style.removeProperty('display');
+    if (this.autoOpen && !this.isOpen) this.open();
   }
 
   private buildHeader(options: ChatbotInitOptions): HTMLElement {
@@ -705,55 +710,6 @@ export class ChatWidget {
       this.showEmptyState(options.chatbotName ?? 'AI Assistant');
     }
     this.setMode('ai');
-  }
-
-  showBlocked(reason: ChatbotBlockReason, description?: string): void {
-    this.setPanelMode('compact');
-    this.closeCountryPopover();
-    this.identifyContainer.classList.remove('visible');
-    this.messagesContainer.classList.remove('hidden');
-    this.footer.classList.add('hidden');
-    this.messagesContainer.innerHTML = '';
-
-    const blocked = document.createElement('div');
-    blocked.className = 'ttcb-blocked';
-
-    const iconEl = document.createElement('div');
-    iconEl.className = 'ttcb-blocked-icon';
-
-    const title = document.createElement('p');
-    title.className = 'ttcb-blocked-title';
-    const desc = document.createElement('p');
-    desc.className = 'ttcb-blocked-desc';
-
-    if (reason === 'no-prompt') {
-      iconEl.innerHTML = fileTextIcon();
-      title.textContent = 'Business Context Required';
-      desc.textContent = description ?? 'Add a system prompt for this agent in the admin panel.';
-    } else if (reason === 'no-agent') {
-      iconEl.innerHTML = settingsIcon();
-      title.textContent = 'Channel Not Connected';
-      desc.textContent =
-        description ??
-        'Connect this Website channel under AI Agents → Connected Channels.';
-    } else if (reason === 'no-directories' || reason === 'no-collections') {
-      iconEl.innerHTML = fileTextIcon();
-      title.textContent = 'Knowledge Base Required';
-      desc.textContent =
-        description ??
-        'Assign at least one knowledge-base collection to this agent in the admin panel.';
-    } else {
-      iconEl.innerHTML = settingsIcon();
-      title.textContent = 'Chatbot Settings Required';
-      desc.textContent =
-        description ??
-        'The chatbot has not been configured yet. Please set it up in the admin panel.';
-    }
-
-    blocked.appendChild(iconEl);
-    blocked.appendChild(title);
-    blocked.appendChild(desc);
-    this.messagesContainer.appendChild(blocked);
   }
 
   clearMessages(name: string): void {

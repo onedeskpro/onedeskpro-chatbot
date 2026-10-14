@@ -18,6 +18,7 @@ function mountWidget() {
   };
   const widget = new ChatWidget(OPTIONS, callbacks);
   widget.readyToChat(OPTIONS);
+  widget.reveal();
   const root = widgetRoot();
   const shadow = root as unknown as ShadowRoot;
   const ui = within(root);
@@ -66,6 +67,44 @@ describe('ChatWidget', () => {
       // Assert
       expect(input).toBeEnabled();
       expect(shadow.activeElement).toBe(input);
+      widget.destroy();
+    });
+  });
+
+  describe('reveal', () => {
+    const callbacks = (): WidgetCallbacks => ({
+      onSend: vi.fn(),
+      onIdentify: vi.fn(),
+      onOpen: vi.fn(),
+      onClose: vi.fn(),
+      onReset: vi.fn(),
+      onRequestHuman: vi.fn(),
+    });
+    const host = () => document.getElementById('onedeskpro-chatbot-host');
+
+    it('should stay hidden when it has not been revealed yet', () => {
+      // Arrange / Act
+      const widget = new ChatWidget({ ...OPTIONS, autoOpen: true }, callbacks());
+
+      // Assert
+      expect(host()).not.toBeVisible();
+      widget.destroy();
+    });
+
+    it.each([
+      { autoOpen: false, opened: false },
+      { autoOpen: true, opened: true },
+    ])('should show the launcher and open=$opened when revealed with autoOpen=$autoOpen', ({ autoOpen, opened }) => {
+      // Arrange
+      const handlers = callbacks();
+      const widget = new ChatWidget({ ...OPTIONS, autoOpen }, handlers);
+
+      // Act
+      widget.reveal();
+
+      // Assert
+      expect(host()).toBeVisible();
+      expect(handlers.onOpen).toHaveBeenCalledTimes(opened ? 1 : 0);
       widget.destroy();
     });
   });

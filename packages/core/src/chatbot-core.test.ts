@@ -13,7 +13,7 @@ import { ok, sdkUrl } from '../test/mocks/handlers';
 import { server } from '../test/mocks/server';
 import { sockets } from '../test/mocks/socket';
 import { widgetText } from '../test/shadow-root';
-import { ChatbotCore } from './chatbot-core';
+import { ChatbotCore, READINESS_RETRY_DELAYS_MS } from './chatbot-core';
 
 const hostCount = () => document.querySelectorAll('#onedeskpro-chatbot-host').length;
 
@@ -98,11 +98,36 @@ describe('ChatbotCore', () => {
       explicit.destroy();
     });
 
-    it('should report a blocked agent instead of becoming ready when config has a block reason', async () => {
+    it.each(['no-prompt', 'no-collections', 'ai-unavailable', 'no-credits'] as const)(
+      'should keep the widget off the page and announce ready when the agent is blocked by %s',
+      async (blockReason) => {
+        // Arrange
+        server.use(
+          http.get(sdkUrl('config'), () => ok(buildSdkConfig({ ready: false, blockReason }))),
+        );
+        const core = new ChatbotCore();
+        const ready = vi.fn();
+        core.on('ready', ready);
+
+        // Act
+        await core.init({ apiKey: 'k' });
+
+        // Assert
+        expect(hostCount()).toBe(0);
+        expect(core.getState()).toMatchObject({ isReady: false, blockReason });
+        expect(ready).toHaveBeenCalledOnce();
+        core.destroy();
+      },
+    );
+
+    it('should keep the widget off the page when no agent is assigned to the channel', async () => {
       // Arrange
       server.use(
         http.get(sdkUrl('config'), () =>
-          ok(buildSdkConfig({ agentName: 'B', ready: false, blockReason: 'no-prompt' })),
+          HttpResponse.json(
+            { statusCode: 403, code: 'agent_not_assigned', message: 'No AI agent is assigned', timestamp: '', path: '/sdk/config' },
+            { status: 403 },
+          ),
         ),
       );
       const core = new ChatbotCore();
@@ -111,24 +136,8 @@ describe('ChatbotCore', () => {
       await core.init({ apiKey: 'k' });
 
       // Assert
-      expect(core.getState().isReady).toBe(false);
-      expect(core.getState().blockReason).toBe('no-prompt');
-      expect(widgetText()).toContain('Business Context Required');
-      core.destroy();
-    });
-
-    it('should stay unready and record the error when the config request fails', async () => {
-      // Arrange
-      server.use(http.get(sdkUrl('config'), () => HttpResponse.error()));
-      const core = new ChatbotCore();
-
-      // Act
-      await core.init({ apiKey: 'k' });
-
-      // Assert
-      expect(core.getState().isReady).toBe(false);
-      expect(core.getState().blockReason).toBeNull();
-      expect(core.getState().error).toBe('Failed to fetch');
+      expect(hostCount()).toBe(0);
+      expect(core.getState()).toMatchObject({ isReady: false, blockReason: 'no-agent' });
       core.destroy();
     });
 
@@ -153,6 +162,155 @@ describe('ChatbotCore', () => {
       // Assert
       await expect(result).resolves.not.toThrow();
       expect(core.getState().isReady).toBe(true);
+      core.destroy();
+    });
+  });
+
+  describe('readiness when the server is unavailable', () => {
+    /** Answers `/sdk/config` with each reply in turn, counting the calls. */
+    function useConfigReplies(...replies: Array<() => Response>) {
+      const calls = { count: 0 };
+      server.use(
+        http.get(sdkUrl('config'), () => {
+          const reply = replies[Math.min(calls.count, replies.length - 1)];
+          calls.count += 1;
+          return reply();
+        }),
+      );
+      return calls;
+    }
+    const unreachable = () => HttpResponse.error();
+    const failing = () => new HttpResponse(null, { status: 503 });
+    const ready = () => ok(buildSdkConfig());
+
+    it.each([
+      { case: 'unreachable', reply: unreachable },
+      { case: 'answering with a 5xx', reply: failing },
+    ])('should keep the widget off the page and retry when the server is $case', async ({ reply }) => {
+      // Arrange
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const calls = useConfigReplies(reply, ready);
+      seedVisitorToken();
+      const core = new ChatbotCore();
+
+      // Act
+      await core.init({ apiKey: 'k' });
+      const whileDown = { hosts: hostCount(), state: core.getState() };
+      await vi.advanceTimersByTimeAsync(READINESS_RETRY_DELAYS_MS[0]);
+
+      // Assert
+      expect(whileDown.hosts).toBe(0);
+      expect(whileDown.state).toMatchObject({ isReady: false, blockReason: 'server-unavailable' });
+      expect(calls.count).toBe(2);
+      expect(hostCount()).toBe(1);
+      expect(core.getState()).toMatchObject({ isReady: true, blockReason: null, error: null });
+      core.destroy();
+    });
+
+    it.each([
+      { case: 'below the first delay', elapsed: READINESS_RETRY_DELAYS_MS[0] - 1, calls: 1 },
+      { case: 'equal to the first delay', elapsed: READINESS_RETRY_DELAYS_MS[0], calls: 2 },
+    ])('should make $calls config call(s) when the time since the failure is $case', async ({ elapsed, calls: expected }) => {
+      // Arrange
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const calls = useConfigReplies(unreachable);
+      const core = new ChatbotCore();
+      await core.init({ apiKey: 'k' });
+
+      // Act
+      await vi.advanceTimersByTimeAsync(elapsed);
+
+      // Assert
+      expect(calls.count).toBe(expected);
+      core.destroy();
+    });
+
+    it('should stop retrying and announce ready when every retry fails', async () => {
+      // Arrange
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const calls = useConfigReplies(unreachable);
+      const core = new ChatbotCore();
+      const readyEvents = vi.fn();
+      core.on('ready', readyEvents);
+      const total = READINESS_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
+
+      // Act
+      await core.init({ apiKey: 'k' });
+      await vi.advanceTimersByTimeAsync(total * 2);
+
+      // Assert
+      expect(calls.count).toBe(1 + READINESS_RETRY_DELAYS_MS.length);
+      expect(readyEvents).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(hostCount()).toBe(0);
+      expect(core.getState()).toMatchObject({ isReady: false, blockReason: 'server-unavailable' });
+      core.destroy();
+    });
+
+    it('should not retry when the server rejects the API key', async () => {
+      // Arrange
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const calls = useConfigReplies(() =>
+        HttpResponse.json(
+          { statusCode: 401, code: 'unauthorized', message: 'Invalid API key', timestamp: '', path: '/sdk/config' },
+          { status: 401 },
+        ),
+      );
+      const core = new ChatbotCore();
+
+      // Act
+      await core.init({ apiKey: 'k' });
+      await vi.advanceTimersByTimeAsync(READINESS_RETRY_DELAYS_MS[0]);
+
+      // Assert
+      expect(calls.count).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(hostCount()).toBe(0);
+      expect(core.getState()).toMatchObject({ isReady: false, blockReason: null, error: 'Invalid API key' });
+      core.destroy();
+    });
+
+    it('should cancel the pending retry when destroyed', async () => {
+      // Arrange
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const calls = useConfigReplies(unreachable, ready);
+      const core = new ChatbotCore();
+      await core.init({ apiKey: 'k' });
+
+      // Act
+      core.destroy();
+      await vi.advanceTimersByTimeAsync(READINESS_RETRY_DELAYS_MS[0]);
+
+      // Assert
+      expect(calls.count).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(hostCount()).toBe(0);
+    });
+  });
+
+  describe('widget visibility', () => {
+    it('should keep the launcher hidden until the visitor check has settled', async () => {
+      // Arrange: hold the visitor check open so init is mid-flight.
+      const gate = deferred<void>();
+      server.use(
+        http.get(sdkUrl('visitor'), async () => {
+          await gate.promise;
+          return ok(buildVisitorVerify());
+        }),
+      );
+      seedVisitorToken();
+      const core = new ChatbotCore();
+
+      // Act
+      const initializing = core.init({ apiKey: 'k' });
+      await vi.waitFor(() => expect(hostCount()).toBe(1));
+      const host = document.getElementById('onedeskpro-chatbot-host');
+
+      // Assert: mounted but hidden while the check runs, shown once it settles.
+      expect(host).not.toBeVisible();
+      gate.resolve();
+      await initializing;
+      expect(host).toBeVisible();
       core.destroy();
     });
   });
