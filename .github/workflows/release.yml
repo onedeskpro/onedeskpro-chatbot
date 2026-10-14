@@ -65,6 +65,8 @@ jobs:
       # `pnpm pack` rewrites the `workspace:*` ranges to real versions; npm then
       # publishes the tarball over OIDC and attaches provenance automatically.
       # Order matters: react depends on core, and both depend on types.
+      # npm reports a failed trusted-publishing login only at verbose level (as an
+      # `oidc` line); otherwise it falls back to no credentials and returns a 404.
       - name: Publish to npm
         env:
           DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
@@ -78,5 +80,5 @@ jobs:
               continue
             fi
             tarball="$(cd "$pkg" && pnpm pack --pack-destination "$RUNNER_TEMP/packs" | tail -n 1)"
-            npm publish "$tarball" --access public --tag "$DIST_TAG"
+            npm publish "$tarball" --access public --tag "$DIST_TAG" --loglevel verbose
           done
