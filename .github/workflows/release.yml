@@ -1,0 +1,82 @@
+# Publishes the three SDK packages to npm when a GitHub release is published.
+#
+# Authentication is npm trusted publishing (OIDC): no npm token is stored in
+# GitHub. Each package must list this repository and `release.yml` as a trusted
+# publisher on npmjs.com, with direct `npm publish` allowed.
+#
+# The release tag must match the package versions: tag `v0.2.0` publishes 0.2.0.
+# A release marked as a pre-release publishes under the `next` dist-tag.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # lets npm exchange the GitHub OIDC token for a publish credential
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Reads the version from `packageManager` in package.json.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or later.
+      - name: Ensure npm supports trusted publishing
+        run: |
+          if node -e 'const [a,b,c]=process.argv[1].split(".").map(Number);process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"; then
+            echo "npm $(npm --version)"
+          else
+            npm install -g npm@^11.5.1
+          fi
+
+      - name: Check the tag matches the package versions
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${TAG#v}"
+          for pkg in packages/shared-types packages/core packages/react; do
+            actual="$(node -p "require('./$pkg/package.json').version")"
+            if [ "$actual" != "$version" ]; then
+              echo "::error::$pkg is $actual but the release tag is $TAG. Run pnpm release:version $version and push before releasing."
+              exit 1
+            fi
+          done
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm type-check
+      - run: pnpm test
+      - run: pnpm build
+
+      # `pnpm pack` rewrites the `workspace:*` ranges to real versions; npm then
+      # publishes the tarball over OIDC and attaches provenance automatically.
+      # Order matters: react depends on core, and both depend on types.
+      - name: Publish to npm
+        env:
+          DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/packs"
+          for pkg in packages/shared-types packages/core packages/react; do
+            name="$(node -p "require('./$pkg/package.json').name")"
+            version="$(node -p "require('./$pkg/package.json').version")"
+            if npm view "$name@$version" version > /dev/null 2>&1; then
+              echo "$name@$version is already on npm, skipping."
+              continue
+            fi
+            tarball="$(cd "$pkg" && pnpm pack --pack-destination "$RUNNER_TEMP/packs" | tail -n 1)"
+            npm publish "$tarball" --access public --tag "$DIST_TAG"
+          done

@@ -103,15 +103,26 @@ Two areas are worth keeping honest as the SDK grows:
 
 ## Releasing
 
-Versions are kept in lockstep across the three packages. To cut a release:
+Versions are kept in lockstep across the three packages. Publishing a GitHub
+release publishes them to npm through
+[`.github/workflows/release.yml`](.github/workflows/release.yml):
 
 ```bash
 pnpm release:version 0.3.0   # bump all three packages
-pnpm build
-pnpm release                 # publish to npm
+git commit -am "chore(release): 0.3.0"
+git push
+gh release create v0.3.0 --generate-notes
 ```
 
-`pnpm publish` rewrites the `workspace:*` dependencies to real version ranges, so publish with pnpm — not `npm publish`.
+The workflow checks that the tag matches the package versions, runs
+type-check, tests and build, then publishes `chatbot-types`, `chatbot-core` and
+`chatbot-react` in that order. A release marked as a pre-release publishes under
+the `next` dist-tag instead of `latest`. Versions already on npm are skipped, so
+a failed run can be re-run.
+
+It authenticates with npm trusted publishing, so no npm token is stored in
+GitHub. Each package lists this repository and `release.yml` as a trusted
+publisher on npmjs.com, with direct `npm publish` allowed.
 
 ## License
 
