@@ -62,3 +62,31 @@ test.describe('chat widget', () => {
     await expect(panel.getByRole('button', { name: /Start Chatting/ })).toBeVisible();
   });
 });
+
+test.describe('headless chat', () => {
+  test('should send a message when the visitor has identified through the custom form', async ({
+    page,
+  }) => {
+    // Arrange: the widget's shadow root stays closed, so only the custom UI is queried.
+    await mockApi(page);
+    await page.route('**/sdk/identify', (route) => fulfillJson(route, { visitorToken: 'vt_e2e' }));
+    await page.route('**/sdk/ticket-status', (route) => fulfillJson(route, { mode: 'ai' }));
+    await page.route('**/sdk/chat', (route) =>
+      fulfillJson(route, { text: 'Hello from the bot', sessionId: 's1', mode: 'ai' }),
+    );
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Headless UI' }).click();
+
+    // Act
+    await page.getByRole('textbox', { name: 'Name' }).fill('Ada Lovelace');
+    await page.getByRole('textbox', { name: 'Phone' }).fill('+8801712345678');
+    await page.getByRole('button', { name: 'Start chatting' }).click();
+    await page.getByPlaceholder('Type a message…').fill('Hi there');
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    // Assert
+    await expect(page.getByText('Hi there')).toBeVisible();
+    await expect(page.getByText('Hello from the bot')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Talk to a person' })).toBeVisible();
+  });
+});

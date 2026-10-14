@@ -166,7 +166,7 @@ const CONFIG_ROWS = [
   ],
   ["placeholder", "string", '"Type your message…"', "Input placeholder text."],
   ["autoOpen", "boolean", "false", "Open the widget automatically on load."],
-  ["sessionId", "string", "auto-generated", "Override the session UUID."],
+  ["requestTimeoutMs", "number", "30000", "Abort an API request after this many ms."],
 ];
 
 // ─── Shared UI helpers ────────────────────────────────────────────────────────

@@ -7,7 +7,18 @@ import { CHATBOT_API_BASE_URL, CHATBOT_API_KEY } from "../chatbot-config";
 // ─── Custom chat UI built on useChatbot() ─────────────────────────────────────
 
 function CustomChat() {
-  const { messages, sendMessage, isLoading, error } = useChatbot();
+  const {
+    messages,
+    sendMessage,
+    submitIdentify,
+    requestHuman,
+    resetSession,
+    isLoading,
+    isReady,
+    needsIdentify,
+    mode,
+    error,
+  } = useChatbot();
   const [input, setInput] = React.useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -16,9 +27,11 @@ function CustomChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
+  const isClosed = mode === "closed";
+
   const handleSend = async () => {
     const text = input.trim();
-    if (!text || isLoading) return;
+    if (!text || isLoading || isClosed) return;
     setInput("");
     // Keep focus so the user can type the next message while waiting.
     inputRef.current?.focus();
@@ -77,6 +90,14 @@ function CustomChat() {
         </div>
       </div>
 
+      {needsIdentify ? (
+        <IdentifyForm
+          disabled={!isReady || isLoading}
+          error={error}
+          onSubmit={submitIdentify}
+        />
+      ) : (
+        <>
       {/* Messages */}
       <div
         style={{
@@ -94,7 +115,25 @@ function CustomChat() {
           <MessageBubble key={msg.id} message={msg} />
         ))}
 
-        {isLoading && <TypingIndicator />}
+        {isLoading && mode === "ai" && <TypingIndicator />}
+
+        {mode === "waiting" && <ModeNote>Waiting for a human agent…</ModeNote>}
+        {mode === "human" && <ModeNote>You are chatting with a human agent.</ModeNote>}
+        {isClosed && (
+          <ModeNote>
+            This conversation is closed.{" "}
+            <button onClick={resetSession} style={LINK_BUTTON_STYLE}>
+              Start a new one
+            </button>
+          </ModeNote>
+        )}
+        {mode === "ai" && messages.length > 0 && !isLoading && (
+          <ModeNote>
+            <button onClick={() => void requestHuman()} style={LINK_BUTTON_STYLE}>
+              Talk to a person
+            </button>
+          </ModeNote>
+        )}
 
         {error && (
           <div
@@ -136,6 +175,7 @@ function CustomChat() {
             }
           }}
           placeholder="Type a message…"
+          disabled={isClosed}
           style={{
             flex: 1,
             border: "1px solid var(--gray-200)",
@@ -156,7 +196,8 @@ function CustomChat() {
         />
         <button
           onClick={() => void handleSend()}
-          disabled={isLoading || !input.trim()}
+          disabled={isLoading || isClosed || !input.trim()}
+          aria-label="Send message"
           style={{
             width: 42,
             height: 42,
@@ -164,8 +205,8 @@ function CustomChat() {
             border: "none",
             background: "var(--brand)",
             color: "#fff",
-            cursor: isLoading || !input.trim() ? "not-allowed" : "pointer",
-            opacity: isLoading || !input.trim() ? 0.5 : 1,
+            cursor: isLoading || isClosed || !input.trim() ? "not-allowed" : "pointer",
+            opacity: isLoading || isClosed || !input.trim() ? 0.5 : 1,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -178,9 +219,133 @@ function CustomChat() {
           </svg>
         </button>
       </div>
+        </>
+      )}
     </div>
   );
 }
+
+const LINK_BUTTON_STYLE: React.CSSProperties = {
+  border: "none",
+  background: "none",
+  padding: 0,
+  color: "var(--brand)",
+  fontSize: "inherit",
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const FIELD_STYLE: React.CSSProperties = {
+  border: "1px solid var(--gray-200)",
+  borderRadius: 8,
+  padding: "10px 12px",
+  fontSize: 14,
+  color: "var(--gray-900)",
+  background: "#fff",
+};
+
+function ModeNote({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ alignSelf: "center", fontSize: 12, color: "var(--gray-500)" }}>
+      {children}
+    </div>
+  );
+}
+
+// A visitor has to identify before the first message; the built-in widget ships
+// this form, a custom UI brings its own.
+function IdentifyForm({
+  disabled,
+  error,
+  onSubmit,
+}: {
+  disabled: boolean;
+  error: string | null;
+  onSubmit: (payload: { name: string; phone: string; email?: string }) => Promise<void>;
+}) {
+  const [name, setName] = React.useState("");
+  const [phone, setPhone] = React.useState("");
+  const [email, setEmail] = React.useState("");
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (disabled || !name.trim() || !phone.trim()) return;
+    void onSubmit({ name, phone, ...(email.trim() ? { email } : {}) });
+  };
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        padding: "24px 20px",
+      }}
+    >
+      <p style={{ fontSize: 14, fontWeight: 600, color: "var(--gray-700)" }}>
+        Tell us who you are to start chatting
+      </p>
+      <input
+        aria-label="Name"
+        placeholder="Your name"
+        autoComplete="name"
+        required
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        style={FIELD_STYLE}
+      />
+      <input
+        aria-label="Phone"
+        placeholder="Phone with country code, e.g. +8801712345678"
+        type="tel"
+        autoComplete="tel"
+        required
+        value={phone}
+        onChange={(e) => setPhone(e.target.value)}
+        style={FIELD_STYLE}
+      />
+      <input
+        aria-label="Email (optional)"
+        placeholder="Email (optional)"
+        type="email"
+        autoComplete="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        style={FIELD_STYLE}
+      />
+      {error && (
+        <p role="alert" style={{ fontSize: 13, color: "#DC2626" }}>
+          {error}
+        </p>
+      )}
+      <button
+        type="submit"
+        disabled={disabled}
+        style={{
+          border: "none",
+          borderRadius: 8,
+          padding: "10px 16px",
+          background: "var(--brand)",
+          color: "#fff",
+          fontSize: 14,
+          fontWeight: 600,
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.5 : 1,
+        }}
+      >
+        Start chatting
+      </button>
+    </form>
+  );
+}
+
+const SENDER_LABELS: Record<ChatMessage["message"]["type"], string> = {
+  human: "You",
+  ai: "Assistant",
+  agent: "Agent",
+};
 
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isHuman = message.message.type === "human";
@@ -209,7 +374,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         {message.message.content}
       </div>
       <span style={{ fontSize: 11, color: "var(--gray-500)" }}>
-        {isHuman ? "You" : "Assistant"}
+        {SENDER_LABELS[message.message.type]}
       </span>
     </div>
   );
@@ -478,11 +643,17 @@ export function HeadlessDemo() {
 
 const HOOK_FIELDS: [string, string, string][] = [
   ["messages", "ChatMessage[]", "All messages in the session"],
-  ["isLoading", "boolean", "True while waiting for AI response"],
+  ["isLoading", "boolean", "True while a request is in flight"],
+  ["isReady", "boolean", "Config loaded and the agent can answer"],
+  ["needsIdentify", "boolean", "True until the visitor has identified"],
+  ["mode", "'ai' | 'waiting' | 'human' | 'closed'", "Who owns the conversation"],
   ["isOpen", "boolean", "Widget open state"],
   ["error", "string | null", "Last error message"],
-  ["sessionId", "string | null", "Current session UUID"],
+  ["visitorToken", "string | null", "Token of the identified visitor"],
+  ["submitIdentify", "({ name, phone, email? }) => Promise", "Identify the visitor"],
   ["sendMessage", "(text) => Promise", "Send a message to the API"],
+  ["requestHuman", "() => Promise", "Hand the conversation to a human agent"],
+  ["resetSession", "() => void", "Clear a closed conversation"],
   ["open / close / toggle", "() => void", "Control the built-in widget"],
 ];
 
@@ -493,11 +664,19 @@ function MyChatUI() {
   const {
     messages,
     sendMessage,
+    submitIdentify,
+    requestHuman,
+    needsIdentify,
+    mode,
     isLoading,
-    error,
   } = useChatbot();
 
   const [input, setInput] = useState('');
+
+  // A visitor identifies before the first message.
+  if (needsIdentify) {
+    return <IdentifyForm onSubmit={submitIdentify} />;
+  }
 
   return (
     <div className="chat-window">
@@ -505,9 +684,13 @@ function MyChatUI() {
         <Bubble key={msg.id} message={msg} />
       ))}
       {isLoading && <TypingDots />}
+      {mode === 'ai' && (
+        <button onClick={requestHuman}>Talk to a person</button>
+      )}
 
       <input
         value={input}
+        disabled={mode === 'closed'}
         onChange={e => setInput(e.target.value)}
         onKeyDown={e => {
           if (e.key === 'Enter')
