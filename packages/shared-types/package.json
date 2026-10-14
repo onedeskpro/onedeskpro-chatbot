@@ -50,7 +50,7 @@
     "clean": "rm -rf dist"
   },
   "devDependencies": {
-    "tsup": "^8.0.0",
+    "tsup": "^8.5.1",
     "typescript": "^6"
   }
 }

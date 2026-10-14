@@ -12,10 +12,10 @@
 		"release": "pnpm -r --filter \"./packages/*\" publish --access public"
 	},
 	"devDependencies": {
-		"@playwright/test": "^1.63.0",
-		"turbo": "^2.0.0",
+		"@playwright/test": "^1.64.0",
+		"turbo": "^2.11.7",
 		"typescript": "^6",
-		"vitest": "^5"
+		"vitest": "^5.0.4"
 	},
 	"packageManager": "pnpm@12.3.4",
 	"description": "Embeddable chatbot SDK for Onedesk Pro",
