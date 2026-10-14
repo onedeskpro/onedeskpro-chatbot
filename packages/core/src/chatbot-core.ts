@@ -72,6 +72,19 @@ function extractAgentText(payload: unknown): string | null {
   return null;
 }
 
+/** The server id of a `message:receive` payload, when it carries one. */
+function extractMessageId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+
+  if (typeof record.id === 'string' && record.id) return record.id;
+  if (record.message && typeof record.message === 'object') {
+    const nested = record.message as Record<string, unknown>;
+    if (typeof nested.id === 'string' && nested.id) return nested.id;
+  }
+  return null;
+}
+
 export class ChatbotCore {
   private apiClient!: ApiClient;
   private emitter = new EventEmitter();
@@ -87,6 +100,8 @@ export class ChatbotCore {
    * before a ticket exists.
    */
   private hasActiveTicket = false;
+  /** Server id of the last `message:receive` push rendered as an agent bubble. */
+  private lastPushId: string | null = null;
   /**
    * Bumped by every init() and by destroy(). An async init compares the token it
    * started with against this before touching anything, so a superseded run — a
@@ -341,11 +356,12 @@ export class ChatbotCore {
   /**
    * Live human (agent) pushes from `/sdk` `message:receive`.
    *
-   * Choice: ignore while `mode === 'ai'`. Website outbound (including AI n8n
+   * Choice: ignore while `mode === 'ai'`. Website outbound (including AI
    * replies) is fanned out to the visitor room; AI text already arrives via
    * `POST /sdk/chat` REST and would double-render as an `agent` bubble. Accept
    * pushes in `waiting` / `human` / `closed` (late agent messages after close).
-   * Also dedupe against the last ai/agent bubble by content.
+   * Also dedupe against the last bubble: an `ai` bubble by content, an `agent`
+   * bubble by server id, so an agent can send the same text twice.
    */
   private handleMessageReceive(payload: unknown): void {
     if (this._state.mode === 'ai') return;
@@ -353,13 +369,14 @@ export class ChatbotCore {
     const content = extractAgentText(payload);
     if (!content) return;
 
+    const pushId = extractMessageId(payload);
     const last = this._state.messages[this._state.messages.length - 1];
-    if (
-      (last?.message.type === 'agent' || last?.message.type === 'ai') &&
-      last.message.content === content
-    ) {
-      return;
+    if (last?.message.content === content) {
+      if (last.message.type === 'ai') return;
+      // Without an id there is no telling a redelivery from a repeat; drop it.
+      if (last.message.type === 'agent' && (!pushId || pushId === this.lastPushId)) return;
     }
+    this.lastPushId = pushId;
 
     const visitorToken = this.visitorTokens.get() ?? this._state.visitorToken ?? '';
     const agentMsg: ChatMessage = {
@@ -484,10 +501,11 @@ export class ChatbotCore {
         this.emitter.emit('ticket-status', { mode: nextMode });
       }
 
-      // AI replies arrive via REST when the episode is AI-owned. Ignore REST text
-      // while waiting/human so a stale client mode cannot double-render with
-      // `message:receive` agent bubbles.
-      if (nextMode === 'ai' && reply) {
+      // The API returns text only when the AI answered this message, and that
+      // includes the reply that hands over to a human or closes the conversation.
+      // While a human owns the episode the text is empty and replies arrive as
+      // `message:receive` agent bubbles, so there is nothing to double-render.
+      if (reply) {
         const last = messages[messages.length - 1];
         const duplicate =
           (last?.message.type === 'agent' || last?.message.type === 'ai') &&

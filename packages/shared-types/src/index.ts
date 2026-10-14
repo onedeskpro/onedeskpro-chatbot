@@ -124,6 +124,6 @@ export interface ChatbotState {
   visitorToken: string | null;
   visitorName: string | null;
   error: string | null;
-  /** Current ticket episode mode (`ai` until human takeover is wired in Task 6). */
+  /** Current ticket episode mode. */
   mode: ChatbotTicketMode;
 }

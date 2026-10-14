@@ -517,6 +517,108 @@ describe('ChatbotCore', () => {
       expect(widgetText()).toContain('Connected with Ana');
       core.destroy();
     });
+
+    it.each(['waiting', 'closed'] as const)(
+      'should show the AI reply once when the same reply moves the conversation to %s',
+      async (mode) => {
+        // Arrange: hold the chat request open so the socket pushes land mid-flight,
+        // in the order the API sends them: the AI message, then the new mode.
+        const gate = deferred<void>();
+        server.use(
+          http.post(sdkUrl('chat'), async () => {
+            await gate.promise;
+            return ok(buildChatResponse({ text: 'Handing you over.', mode }));
+          }),
+        );
+        const core = await initVerified();
+
+        // Act
+        const sending = core.sendMessage('I need a person');
+        sockets[0].serverEmit('message:receive', { id: 'm1', textMessage: 'Handing you over.' });
+        sockets[0].serverEmit('ticket:status', buildTicketStatus({ mode, conversationId: 'c1' }));
+        gate.resolve();
+        await sending;
+
+        // Assert
+        expect(core.getState().messages.map((m) => m.message.content)).toEqual([
+          'I need a person',
+          'Handing you over.',
+        ]);
+        expect(core.getState().mode).toBe(mode);
+        core.destroy();
+      },
+    );
+
+    it('should show the AI reply once when its socket push lands after the mode change', async () => {
+      // Arrange
+      const gate = deferred<void>();
+      server.use(
+        http.post(sdkUrl('chat'), async () => {
+          await gate.promise;
+          return ok(buildChatResponse({ text: 'Handing you over.', mode: 'waiting' }));
+        }),
+      );
+      const core = await initVerified();
+
+      // Act
+      const sending = core.sendMessage('I need a person');
+      sockets[0].serverEmit('ticket:status', buildTicketStatus({ mode: 'waiting' }));
+      sockets[0].serverEmit('message:receive', { id: 'm1', textMessage: 'Handing you over.' });
+      gate.resolve();
+      await sending;
+
+      // Assert
+      expect(core.getState().messages.map((m) => m.message.content)).toEqual([
+        'I need a person',
+        'Handing you over.',
+      ]);
+      core.destroy();
+    });
+  });
+
+  describe('agent messages', () => {
+    it('should show both messages when a human agent sends the same text twice', async () => {
+      // Arrange
+      useTicketStatus(buildTicketStatus({ mode: 'human', agentName: 'Ana' }));
+      const core = await initVerified();
+
+      // Act
+      sockets[0].serverEmit('message:receive', { id: 'm1', textMessage: 'ok' });
+      sockets[0].serverEmit('message:receive', { id: 'm2', textMessage: 'ok' });
+
+      // Assert
+      expect(core.getState().messages.map((m) => [m.message.type, m.message.content])).toEqual([
+        ['agent', 'ok'],
+        ['agent', 'ok'],
+      ]);
+      core.destroy();
+    });
+
+    it('should show one message when the same agent message is delivered twice', async () => {
+      // Arrange
+      useTicketStatus(buildTicketStatus({ mode: 'human', agentName: 'Ana' }));
+      const core = await initVerified();
+
+      // Act
+      sockets[0].serverEmit('message:receive', { id: 'm1', textMessage: 'ok' });
+      sockets[0].serverEmit('message:receive', { id: 'm1', textMessage: 'ok' });
+
+      // Assert
+      expect(core.getState().messages).toHaveLength(1);
+      core.destroy();
+    });
+
+    it('should ignore a pushed message when the AI owns the conversation', async () => {
+      // Arrange
+      const core = await initVerified();
+
+      // Act
+      sockets[0].serverEmit('message:receive', { id: 'm1', textMessage: 'AI reply' });
+
+      // Assert
+      expect(core.getState().messages).toHaveLength(0);
+      core.destroy();
+    });
   });
 
   describe('destroy', () => {
