@@ -630,6 +630,74 @@ describe('ChatbotCore', () => {
     });
   });
 
+  describe('sendVoice', () => {
+    const recording = () => ({
+      blob: new Blob(['opus-bytes'], { type: 'audio/webm;codecs=opus' }),
+      durationSeconds: 4.2,
+    });
+
+    it('should reject when called before identify', async () => {
+      // Arrange
+      const core = new ChatbotCore();
+      await core.init({ apiKey: 'k' });
+
+      // Act / Assert
+      await expect(core.sendVoice(recording())).rejects.toThrow(/Identify before sendVoice/);
+      core.destroy();
+    });
+
+    it('should upload the note and post a voice message with its duration when the recording is sent', async () => {
+      // Arrange
+      const chatBodies: unknown[] = [];
+      const uploadTypes: string[] = [];
+      server.use(
+        http.post(sdkUrl('upload'), async ({ request }) => {
+          uploadTypes.push(await request.text());
+          return ok(buildAttachment({ type: 'audio/webm', fileName: 'voice-message-1.webm', size: 10 }));
+        }),
+        http.post(sdkUrl('chat'), async ({ request }) => {
+          chatBodies.push(await request.json());
+          return ok(buildChatResponse({ text: '' }));
+        }),
+      );
+      const core = await initVerified();
+
+      // Act
+      await core.sendVoice(recording());
+
+      // Assert
+      expect(uploadTypes[0]).toContain('Content-Type: audio/webm');
+      expect(chatBodies).toEqual([
+        {
+          chatInput: '',
+          visitorToken: VISITOR_TOKEN,
+          messageType: 'voice',
+          attachments: [
+            { type: 'audio/webm', url: buildAttachment().url, fileName: 'voice-message-1.webm', size: 10, durationSeconds: 4 },
+          ],
+        },
+      ]);
+      const [message] = core.getState().messages;
+      expect(message.pending).toBe(false);
+      expect(message.message.attachments?.[0].durationSeconds).toBe(4);
+      expect(widgetRoot().querySelector('audio')?.getAttribute('src')).toBe(buildAttachment().url);
+      core.destroy();
+    });
+
+    it('should do nothing when the recording is empty', async () => {
+      // Arrange
+      const core = await initVerified();
+
+      // Act
+      await core.sendVoice({ blob: new Blob([], { type: 'audio/webm' }), durationSeconds: 0 });
+
+      // Assert
+      expect(core.getState().messages).toEqual([]);
+      expect(core.getState().isLoading).toBe(false);
+      core.destroy();
+    });
+  });
+
   describe('agent media messages', () => {
     it('should render the attachment when an agent pushes a media message', async () => {
       // Arrange

@@ -1,6 +1,7 @@
 import { within } from '@testing-library/dom';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { installFakeMediaRecorder } from '../../test/mocks/media-recorder';
 import { widgetRoot } from '../../test/shadow-root';
 import { ChatWidget, type WidgetCallbacks } from './widget';
 
@@ -11,6 +12,7 @@ function mountWidget() {
   const callbacks: WidgetCallbacks = {
     onSend: vi.fn(),
     onSendAttachments: vi.fn(),
+    onSendVoice: vi.fn(),
     onIdentify: vi.fn(),
     onOpen: vi.fn(),
     onClose: vi.fn(),
@@ -76,6 +78,7 @@ describe('ChatWidget', () => {
     const callbacks = (): WidgetCallbacks => ({
       onSend: vi.fn(),
       onSendAttachments: vi.fn(),
+      onSendVoice: vi.fn(),
       onIdentify: vi.fn(),
       onOpen: vi.fn(),
       onClose: vi.fn(),
@@ -239,6 +242,90 @@ describe('ChatWidget', () => {
       expect(ui.getByRole('button', { name: 'Add attachment' })).toBeDisabled();
       expect(ui.queryByRole('button', { name: 'Remove photo.png' })).toBeNull();
       widget.destroy();
+    });
+  });
+
+  describe('voice messages', () => {
+    it('should explain that recording is unavailable when the browser has no recorder', async () => {
+      // Arrange (jsdom has no MediaRecorder)
+      const user = userEvent.setup();
+      const { widget, shadow, callbacks } = mountWidget();
+      widget.open();
+      const ui = within(shadow as unknown as HTMLElement);
+
+      // Act
+      await user.click(ui.getByRole('button', { name: 'Record voice message' }));
+
+      // Assert
+      expect(ui.getByRole('alert')).toHaveTextContent('not supported');
+      expect(callbacks.onSendVoice).not.toHaveBeenCalled();
+      widget.destroy();
+    });
+
+    it('should show the recording bar, then a preview, and send the note when confirmed', async () => {
+      // Arrange
+      installFakeMediaRecorder();
+      const user = userEvent.setup();
+      const { widget, shadow, callbacks, input } = mountWidget();
+      widget.open();
+      const ui = within(shadow as unknown as HTMLElement);
+
+      // Act — record
+      await user.click(ui.getByRole('button', { name: 'Record voice message' }));
+
+      // Assert — recording state replaces the text form
+      expect(ui.getByRole('timer')).toBeVisible();
+      expect(input).not.toBeVisible();
+
+      // Act — stop, then send
+      await user.click(ui.getByRole('button', { name: 'Stop recording' }));
+      expect(ui.getByRole('button', { name: 'Send voice message' })).toBeVisible();
+      await user.click(ui.getByRole('button', { name: 'Send voice message' }));
+
+      // Assert — the recording went to the core and the composer is back
+      expect(callbacks.onSendVoice).toHaveBeenCalledTimes(1);
+      const [recording] = (callbacks.onSendVoice as ReturnType<typeof vi.fn>).mock.calls[0] as [
+        { blob: Blob; durationSeconds: number },
+      ];
+      expect(recording.blob.size).toBeGreaterThan(0);
+      expect(recording.durationSeconds).toBeGreaterThanOrEqual(1);
+      expect(input).toBeVisible();
+      widget.destroy();
+    });
+
+    it('should drop the recording and return to the composer when cancelled', async () => {
+      // Arrange
+      const fakes = installFakeMediaRecorder();
+      const user = userEvent.setup();
+      const { widget, shadow, callbacks, input } = mountWidget();
+      widget.open();
+      const ui = within(shadow as unknown as HTMLElement);
+      await user.click(ui.getByRole('button', { name: 'Record voice message' }));
+
+      // Act
+      await user.click(ui.getByRole('button', { name: 'Cancel recording' }));
+
+      // Assert
+      expect(input).toBeVisible();
+      expect(callbacks.onSendVoice).not.toHaveBeenCalled();
+      expect(fakes.tracks[0].stop).toHaveBeenCalled();
+      widget.destroy();
+    });
+
+    it('should stop the microphone when destroyed mid-recording', async () => {
+      // Arrange
+      const fakes = installFakeMediaRecorder();
+      const user = userEvent.setup();
+      const { widget, shadow } = mountWidget();
+      widget.open();
+      await user.click(within(shadow as unknown as HTMLElement).getByRole('button', { name: 'Record voice message' }));
+
+      // Act
+      widget.destroy();
+
+      // Assert
+      expect(fakes.tracks[0].stop).toHaveBeenCalled();
+      expect(fakes.recorders[0].state).toBe('inactive');
     });
   });
 

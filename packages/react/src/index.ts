@@ -15,6 +15,7 @@ export type {
   ChatbotState,
   ChatMessage,
   ChatAttachment,
+  VoiceRecording,
   ChatbotEventMap,
   ChatbotTicketMode,
   TicketStatusData,

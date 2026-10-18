@@ -98,6 +98,7 @@ The IIFE build exposes a `window.OnedeskProChatbot` global:
 | `submitIdentify({ name, phone, email? })` | Identifies the visitor and unlocks the chat. Returns a promise. |
 | `sendMessage(text)` | Sends a message and, in `ai` mode, appends the reply. Returns a promise that rejects if the visitor has not identified. |
 | `sendAttachments(files, text?)` | Sends up to 10 files (10 MB each) as one media message, with `text` as the caption. Each file is uploaded through the API first; the message sits in `messages` with `pending: true` and local previews until then. Rejects if the visitor has not identified; a file over the limits sets `error` instead. |
+| `sendVoice(recording)` | Sends a voice note. `recording` is `{ blob, mimeType?, durationSeconds }`, as `VoiceRecorder` produces; it is re-encoded as mono WAV with a waveform where Web Audio allows, uploaded, and stored as a `voice` message. Rejects if the visitor has not identified. |
 | `requestHuman()` | Escalates the conversation to a human agent. Does nothing unless the mode is `ai` and a conversation has started. Returns a promise. |
 | `open()` / `close()` / `toggle()` | Control widget visibility. |
 | `resetSession()` | Clears a `closed` conversation so the visitor can start a new one. Does nothing in any other mode. |
@@ -159,7 +160,9 @@ off(); // unsubscribe
 
 ## Also exported
 
-`ApiClient`, `SdkSocket`, `resolveSdkSocketUrl`, `EventEmitter`, `SessionManager`, `isChatbotRequestError`, `DEFAULT_API_BASE_URL`, `DEFAULT_REQUEST_TIMEOUT_MS`, `SDK_UPLOAD_MAX_BYTES`, `SDK_CHAT_MAX_ATTACHMENTS`, the `ChatbotRequestError` and `SdkSocketConnectOptions` types, and every type from `@onedeskpro/chatbot-types`.
+`ApiClient`, `SdkSocket`, `resolveSdkSocketUrl`, `EventEmitter`, `SessionManager`, `VoiceRecorder`, `isChatbotRequestError`, `DEFAULT_API_BASE_URL`, `DEFAULT_REQUEST_TIMEOUT_MS`, `SDK_UPLOAD_MAX_BYTES`, `SDK_CHAT_MAX_ATTACHMENTS`, `VOICE_MAX_DURATION_SECONDS`, the `ChatbotRequestError`, `SdkSocketConnectOptions`, `VoiceRecorderSnapshot` and `VoiceRecorderState` types, and every type from `@onedeskpro/chatbot-types`.
+
+`VoiceRecorder` records with `MediaRecorder` for custom UIs: `new VoiceRecorder(onChange)`, then `start()`, `stop()` (resolves with the recording to pass to `sendVoice`), `cancel()`, and `destroy()`. `onChange` receives `{ state, elapsedSeconds, level, result }`. Recording stops on its own at `VOICE_MAX_DURATION_SECONDS` (5 minutes).
 
 `SessionManager` is deprecated. It is now the visitor token store and is kept only so existing imports keep resolving.
 

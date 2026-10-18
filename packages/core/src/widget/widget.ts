@@ -3,8 +3,11 @@ import type {
   ChatbotInitOptions,
   ChatbotTicketMode,
   IdentifyRequest,
+  VoiceRecording,
 } from '@onedeskpro/chatbot-types';
 import { attachmentProblem, createPreviewUrl, revokePreviewUrl } from '../attachments';
+import { formatAudioDuration } from '../audio';
+import { VoiceRecorder, type VoiceRecorderSnapshot } from '../voice-recorder';
 import {
   buildE164Phone,
   DEFAULT_DIAL_COUNTRY,
@@ -23,12 +26,15 @@ import {
   envelopeIcon,
   fileIcon,
   imageIcon,
+  micIcon,
   newSessionIcon,
   paperclipIcon,
   personIcon,
   plusIcon,
   requestHumanIcon,
   sendIcon,
+  stopIcon,
+  trashIcon,
   shieldCheckIcon,
   starsIcon,
   verifiedCheckIcon,
@@ -38,6 +44,8 @@ export interface WidgetCallbacks {
   onSend: (text: string) => void;
   /** Files picked in the composer, with whatever was typed as the caption. */
   onSendAttachments: (files: File[], text: string) => void;
+  /** A voice note the visitor recorded and confirmed. */
+  onSendVoice: (recording: VoiceRecording) => void;
   onIdentify: (payload: IdentifyRequest) => void;
   onOpen: () => void;
   onClose: () => void;
@@ -95,6 +103,20 @@ export class ChatWidget {
   private composeError!: HTMLElement;
   private pendingFiles: PendingFile[] = [];
   private attachMenuOpen = false;
+  private composeForm!: HTMLFormElement;
+  private micBtn!: HTMLButtonElement;
+  private voiceBar!: HTMLElement;
+  private voiceTime!: HTMLElement;
+  private voiceLevel!: HTMLElement;
+  private voiceStopBtn!: HTMLButtonElement;
+  private voiceCancelBtn!: HTMLButtonElement;
+  private voicePreview!: HTMLElement;
+  private voiceAudio!: HTMLAudioElement;
+  private voicePreviewTime!: HTMLElement;
+  private voiceSendBtn!: HTMLButtonElement;
+  private voiceDiscardBtn!: HTMLButtonElement;
+  private recorder: VoiceRecorder | null = null;
+  private voicePreviewUrl = '';
   private nameInput!: HTMLInputElement;
   private phoneInput!: HTMLInputElement;
   private emailInput!: HTMLInputElement;
@@ -180,12 +202,16 @@ export class ChatWidget {
     this.composeError.setAttribute('role', 'alert');
     this.footer.appendChild(this.composeError);
 
+    this.footer.appendChild(this.buildVoiceBar());
+    this.footer.appendChild(this.buildVoicePreview());
+
     const form = document.createElement('form');
     form.className = 'ttcb-form';
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       this.handleSend();
     });
+    this.composeForm = form;
     form.appendChild(this.buildAttachControls());
 
     this.input = document.createElement('input');
@@ -201,7 +227,16 @@ export class ChatWidget {
     this.sendBtn.innerHTML = sendIcon();
     this.sendBtn.setAttribute('aria-label', 'Send message');
 
+    this.micBtn = document.createElement('button');
+    this.micBtn.type = 'button';
+    this.micBtn.className = 'ttcb-mic-btn';
+    this.micBtn.setAttribute('aria-label', 'Record voice message');
+    this.micBtn.title = 'Record voice message';
+    this.micBtn.innerHTML = micIcon();
+    this.micBtn.addEventListener('click', () => void this.startVoice());
+
     form.appendChild(this.input);
+    form.appendChild(this.micBtn);
     form.appendChild(this.sendBtn);
     this.footer.appendChild(form);
     this.panel.appendChild(this.footer);
@@ -476,6 +511,152 @@ export class ChatWidget {
 
       this.pendingTray.appendChild(row);
     });
+  }
+
+  /** Recording state: red dot, timer, level meter, cancel and stop. */
+  private buildVoiceBar(): HTMLElement {
+    this.voiceBar = document.createElement('div');
+    this.voiceBar.className = 'ttcb-voice-bar';
+    this.voiceBar.setAttribute('role', 'group');
+    this.voiceBar.setAttribute('aria-label', 'Recording voice message');
+
+    const dot = document.createElement('span');
+    dot.className = 'ttcb-voice-dot';
+    dot.setAttribute('aria-hidden', 'true');
+
+    this.voiceTime = document.createElement('span');
+    this.voiceTime.className = 'ttcb-voice-time';
+    this.voiceTime.setAttribute('role', 'timer');
+    this.voiceTime.textContent = '0:00';
+
+    const meter = document.createElement('div');
+    meter.className = 'ttcb-voice-meter';
+    meter.setAttribute('aria-hidden', 'true');
+    this.voiceLevel = document.createElement('span');
+    this.voiceLevel.className = 'ttcb-voice-level';
+    meter.appendChild(this.voiceLevel);
+
+    this.voiceCancelBtn = this.createVoiceButton('Cancel recording', trashIcon(), () =>
+      this.cancelVoice(),
+    );
+    this.voiceStopBtn = this.createVoiceButton('Stop recording', stopIcon(), () => void this.stopVoice());
+    this.voiceStopBtn.classList.add('primary');
+
+    this.voiceBar.appendChild(dot);
+    this.voiceBar.appendChild(this.voiceTime);
+    this.voiceBar.appendChild(meter);
+    this.voiceBar.appendChild(this.voiceCancelBtn);
+    this.voiceBar.appendChild(this.voiceStopBtn);
+    return this.voiceBar;
+  }
+
+  /** Preview state: listen back, then discard or send. */
+  private buildVoicePreview(): HTMLElement {
+    this.voicePreview = document.createElement('div');
+    this.voicePreview.className = 'ttcb-voice-preview';
+    this.voicePreview.setAttribute('role', 'group');
+    this.voicePreview.setAttribute('aria-label', 'Voice message preview');
+
+    this.voiceAudio = document.createElement('audio');
+    this.voiceAudio.className = 'ttcb-voice-audio';
+    this.voiceAudio.controls = true;
+    this.voiceAudio.preload = 'metadata';
+    this.voiceAudio.setAttribute('aria-label', 'Recorded voice message');
+
+    this.voicePreviewTime = document.createElement('span');
+    this.voicePreviewTime.className = 'ttcb-voice-time';
+
+    this.voiceDiscardBtn = this.createVoiceButton('Discard voice message', trashIcon(), () =>
+      this.cancelVoice(),
+    );
+    this.voiceSendBtn = this.createVoiceButton('Send voice message', sendIcon(), () =>
+      this.sendVoice(),
+    );
+    this.voiceSendBtn.classList.add('primary');
+
+    this.voicePreview.appendChild(this.voiceAudio);
+    this.voicePreview.appendChild(this.voicePreviewTime);
+    this.voicePreview.appendChild(this.voiceDiscardBtn);
+    this.voicePreview.appendChild(this.voiceSendBtn);
+    return this.voicePreview;
+  }
+
+  private createVoiceButton(label: string, icon: string, onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ttcb-voice-btn';
+    btn.setAttribute('aria-label', label);
+    btn.title = label;
+    btn.innerHTML = icon;
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  /** Starts a voice note; reports a missing microphone or denied permission inline. */
+  private async startVoice(): Promise<void> {
+    if (this.micBtn.disabled) return;
+    this.closeAttachMenu();
+    this.showComposeError('');
+    if (!VoiceRecorder.isSupported()) {
+      this.showComposeError('Voice messages are not supported in this browser.');
+      return;
+    }
+    this.recorder?.destroy();
+    this.recorder = new VoiceRecorder((snapshot) => this.renderVoice(snapshot));
+    try {
+      await this.recorder.start();
+    } catch (error) {
+      this.showComposeError(error instanceof Error ? error.message : 'Could not start recording.');
+      this.recorder.destroy();
+      this.recorder = null;
+      this.renderVoice({ state: 'idle', elapsedSeconds: 0, level: 0, result: null });
+    }
+  }
+
+  private async stopVoice(): Promise<void> {
+    await this.recorder?.stop();
+  }
+
+  private cancelVoice(): void {
+    this.recorder?.cancel();
+    this.recorder?.destroy();
+    this.recorder = null;
+    this.renderVoice({ state: 'idle', elapsedSeconds: 0, level: 0, result: null });
+    this.input.focus();
+  }
+
+  private sendVoice(): void {
+    const result = this.recorder?.getSnapshot().result;
+    if (!result) return;
+    this.cancelVoice();
+    this.callbacks.onSendVoice(result);
+  }
+
+  /** Swaps the composer between its text form, the recording bar and the preview. */
+  private renderVoice(snapshot: VoiceRecorderSnapshot): void {
+    if (this.destroyed) return;
+    const { state } = snapshot;
+    this.composeForm.classList.toggle('hidden', state !== 'idle');
+    this.voiceBar.classList.toggle('visible', state === 'recording');
+    this.voicePreview.classList.toggle('visible', state === 'preview');
+
+    if (state === 'recording') {
+      this.voiceTime.textContent = formatAudioDuration(snapshot.elapsedSeconds);
+      this.voiceLevel.style.width = `${Math.max(4, Math.round(snapshot.level * 100))}%`;
+      return;
+    }
+
+    revokePreviewUrl(this.voicePreviewUrl);
+    this.voicePreviewUrl = '';
+    this.voiceAudio.removeAttribute('src');
+    if (state === 'preview' && snapshot.result) {
+      this.voicePreviewUrl = createPreviewUrl(
+        new File([snapshot.result.blob], 'voice-preview', { type: snapshot.result.blob.type }),
+      );
+      if (this.voicePreviewUrl) this.voiceAudio.src = this.voicePreviewUrl;
+      this.voicePreviewTime.textContent = formatAudioDuration(snapshot.result.durationSeconds);
+      queueMicrotask(() => this.voiceSendBtn.focus());
+    }
   }
 
   /** Inline composer error (file too large, too many files, upload rejected). */
@@ -896,6 +1077,7 @@ export class ChatWidget {
     // Keep send disabled when compose is locked (closed mode via setMode).
     this.sendBtn.disabled = loading || this.input.disabled;
     this.attachBtn.disabled = loading || this.input.disabled;
+    this.micBtn.disabled = loading || this.input.disabled;
     if (loading) {
       this.closeAttachMenu();
       if (!this.shadow.getElementById('ttcb-typing')) {
@@ -1017,12 +1199,15 @@ export class ChatWidget {
     if (closed) {
       this.sendBtn.disabled = true;
       this.attachBtn.disabled = true;
+      this.micBtn.disabled = true;
       this.closeAttachMenu();
       this.clearPendingFiles();
+      if (this.recorder) this.cancelVoice();
       this.showComposeError('');
     } else if (!this.shadow.getElementById('ttcb-typing')) {
       this.sendBtn.disabled = false;
       this.attachBtn.disabled = false;
+      this.micBtn.disabled = false;
     }
 
     if (!inChat) {
@@ -1054,6 +1239,10 @@ export class ChatWidget {
   destroy(): void {
     this.destroyed = true;
     this.clearPendingFiles();
+    this.recorder?.destroy();
+    this.recorder = null;
+    revokePreviewUrl(this.voicePreviewUrl);
+    this.voicePreviewUrl = '';
     this.host.remove();
   }
 

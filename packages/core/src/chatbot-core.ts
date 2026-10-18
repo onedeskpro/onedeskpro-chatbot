@@ -9,14 +9,18 @@ import type {
   IdentifyRequest,
   SdkConfigResponse,
   TicketStatusData,
+  VoiceRecording,
 } from '@onedeskpro/chatbot-types';
 import { ApiClient, DEFAULT_REQUEST_TIMEOUT_MS, isChatbotRequestError } from './api-client';
 import {
   attachmentProblem,
+  createPreviewUrl,
   extractAttachments,
   revokePreviewUrl,
   toPreviewAttachment,
 } from './attachments';
+import { encodeVoice } from './audio';
+import { SDK_UPLOAD_MAX_BYTES } from './constants';
 import { DEFAULT_API_BASE_URL } from './constants';
 import { EventEmitter } from './event-emitter';
 import { SdkSocket } from './sdk-socket';
@@ -300,6 +304,7 @@ export class ChatbotCore {
     this.widget = new ChatWidget(this.options, {
       onSend: (text) => void this.sendMessage(text),
       onSendAttachments: (files, text) => void this.sendAttachments(files, text),
+      onSendVoice: (recording) => void this.sendVoice(recording),
       onIdentify: (payload) => void this.submitIdentify(payload),
       onOpen: () => {
         this.setState({ isOpen: true });
@@ -567,6 +572,13 @@ export class ChatbotCore {
     await this.deliver({ chatInput: content, visitorToken }, modeAtSend);
   }
 
+  /** Records a send that never left the browser: `state.error`, the composer, and `error`. */
+  private rejectSend(message: string): void {
+    this.setState({ error: message });
+    this.widget?.showComposeError(message);
+    this.emitter.emit('error', new Error(message));
+  }
+
   /**
    * Sends `files` as one media message, with `text` as its caption. The bubble
    * appears at once with local previews, uploads each file through the API, then
@@ -586,14 +598,85 @@ export class ChatbotCore {
 
     const problem = attachmentProblem(files);
     if (problem) {
-      this.setState({ error: problem });
-      this.widget?.showComposeError(problem);
-      this.emitter.emit('error', new Error(problem));
+      this.rejectSend(problem);
       return;
     }
 
-    const caption = text.trim();
-    const previews = files.map(toPreviewAttachment);
+    await this.uploadThenDeliver({
+      visitorToken,
+      files,
+      previews: files.map(toPreviewAttachment),
+      caption: text.trim(),
+    });
+  }
+
+  /**
+   * Sends a recorded voice note (from `VoiceRecorder` or your own recorder). The
+   * recording is re-encoded as mono WAV with a waveform where Web Audio allows,
+   * uploaded, and posted as a `voice` message so the inbox shows its voice player.
+   * Rejects when the visitor has not identified; an unusable or oversized recording is
+   * reported as `state.error` (and an `error` event) without sending anything.
+   */
+  async sendVoice(recording: VoiceRecording): Promise<void> {
+    const visitorToken = this.requireVisitorToken('sendVoice');
+
+    if (this._state.mode === 'closed') {
+      this.setState({ error: 'Conversation is closed' });
+      return;
+    }
+
+    if (!recording?.blob || recording.blob.size === 0) return;
+    if (this._state.isLoading || this._state.needsIdentify) return;
+
+    let encoded;
+    try {
+      encoded = await encodeVoice(recording);
+    } catch {
+      this.rejectSend('Could not process the recording.');
+      return;
+    }
+    if (encoded.file.size > SDK_UPLOAD_MAX_BYTES) {
+      this.rejectSend('This voice message is too long to send.');
+      return;
+    }
+
+    const voiceMeta: Pick<ChatAttachment, 'durationSeconds' | 'waveform'> = {
+      durationSeconds: encoded.durationSeconds,
+      ...(encoded.waveform ? { waveform: encoded.waveform } : {}),
+    };
+    const preview: ChatAttachment = {
+      type: encoded.file.type,
+      url: createPreviewUrl(encoded.file),
+      fileName: encoded.file.name,
+      size: encoded.file.size,
+      ...voiceMeta,
+    };
+
+    await this.uploadThenDeliver({
+      visitorToken,
+      files: [encoded.file],
+      previews: [preview],
+      caption: '',
+      messageType: 'voice',
+      decorate: (uploaded) => ({ ...uploaded, ...voiceMeta }),
+    });
+  }
+
+  /**
+   * Shared tail of every file send: an optimistic `pending` bubble with local previews,
+   * one upload per file, then `deliver`. A failed upload removes the bubble; a failed
+   * chat post keeps it (the files are already stored) and records the error.
+   */
+  private async uploadThenDeliver(input: {
+    visitorToken: string;
+    files: File[];
+    previews: ChatAttachment[];
+    caption: string;
+    messageType?: 'media' | 'voice';
+    /** Adds client-side metadata (duration, waveform) to what the API returned. */
+    decorate?: (uploaded: ChatAttachment) => ChatAttachment;
+  }): Promise<void> {
+    const { visitorToken, files, previews, caption } = input;
     const optimistic: ChatMessage = {
       id: localMessageId(),
       sessionId: visitorToken,
@@ -606,7 +689,8 @@ export class ChatbotCore {
     const uploaded: ChatAttachment[] = [];
     try {
       for (const file of files) {
-        uploaded.push(await this.apiClient.uploadAttachment(file, visitorToken));
+        const attachment = await this.apiClient.uploadAttachment(file, visitorToken);
+        uploaded.push(input.decorate ? input.decorate(attachment) : attachment);
       }
     } catch (err) {
       // Nothing reached the conversation, so the bubble goes away with the error.
@@ -628,7 +712,15 @@ export class ChatbotCore {
     for (const preview of previews) revokePreviewUrl(preview.url);
     if (modeAtSend === 'ai') this.widget?.setLoading(true);
 
-    await this.deliver({ chatInput: caption, visitorToken, attachments: uploaded }, modeAtSend);
+    await this.deliver(
+      {
+        chatInput: caption,
+        visitorToken,
+        attachments: uploaded,
+        ...(input.messageType ? { messageType: input.messageType } : {}),
+      },
+      modeAtSend,
+    );
   }
 
   /**

@@ -10,6 +10,8 @@ export { EventEmitter } from './event-emitter';
 export { SessionManager } from './session-manager';
 export { SdkSocket, resolveSdkSocketUrl } from './sdk-socket';
 export type { SdkSocketConnectOptions } from './sdk-socket';
+export { VoiceRecorder, VOICE_MAX_DURATION_SECONDS } from './voice-recorder';
+export type { VoiceRecorderSnapshot, VoiceRecorderState } from './voice-recorder';
 export type {
   ChatbotInitOptions,
   ChatbotState,
@@ -17,6 +19,8 @@ export type {
   ChatbotTicketMode,
   ChatMessage,
   ChatAttachment,
+  ChatMessageKind,
+  VoiceRecording,
   UploadAttachmentResponseData,
   ApiError,
   ApiResponse,

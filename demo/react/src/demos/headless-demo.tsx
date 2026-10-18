@@ -1,7 +1,7 @@
 import React, { useRef, useEffect } from "react";
 import { ChatbotProvider, useChatbot } from "@onedeskpro/chatbot-react";
 import type { ChatMessage } from "@onedeskpro/chatbot-types";
-import { DEFAULT_API_BASE_URL } from "@onedeskpro/chatbot-core";
+import { DEFAULT_API_BASE_URL, VoiceRecorder } from "@onedeskpro/chatbot-core";
 import { CHATBOT_API_BASE_URL, CHATBOT_API_KEY } from "../chatbot-config";
 
 // ─── Custom chat UI built on useChatbot() ─────────────────────────────────────
@@ -11,6 +11,7 @@ function CustomChat() {
     messages,
     sendMessage,
     sendAttachments,
+    sendVoice,
     submitIdentify,
     requestHuman,
     resetSession,
@@ -24,6 +25,11 @@ function CustomChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const recorderRef = useRef<VoiceRecorder | null>(null);
+  const [recording, setRecording] = React.useState<{ state: string; elapsedSeconds: number } | null>(null);
+  const [voiceError, setVoiceError] = React.useState<string | null>(null);
+
+  useEffect(() => () => recorderRef.current?.destroy(), []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -39,6 +45,30 @@ function CustomChat() {
     inputRef.current?.focus();
     await sendMessage(text);
     inputRef.current?.focus();
+  };
+
+  // One tap starts recording, the next stops it and sends the note.
+  const handleVoice = async () => {
+    if (isLoading || isClosed) return;
+    setVoiceError(null);
+    if (recorderRef.current) {
+      const result = await recorderRef.current.stop();
+      recorderRef.current.destroy();
+      recorderRef.current = null;
+      setRecording(null);
+      if (result) await sendVoice(result);
+      return;
+    }
+    const recorder = new VoiceRecorder((snapshot) =>
+      setRecording(snapshot.state === "recording" ? snapshot : null)
+    );
+    recorderRef.current = recorder;
+    try {
+      await recorder.start();
+    } catch (err) {
+      recorderRef.current = null;
+      setVoiceError(err instanceof Error ? err.message : "Could not start recording.");
+    }
   };
 
   const handleFiles = async (files: FileList | null) => {
@@ -146,7 +176,7 @@ function CustomChat() {
           </ModeNote>
         )}
 
-        {error && (
+        {(error || voiceError) && (
           <div
             style={{
               alignSelf: "center",
@@ -158,7 +188,7 @@ function CustomChat() {
               fontSize: 13,
             }}
           >
-            {error}
+            {error || voiceError}
           </div>
         )}
 
@@ -210,6 +240,37 @@ function CustomChat() {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
           </svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleVoice()}
+          disabled={isLoading || isClosed}
+          aria-label={recording ? "Stop and send voice message" : "Record voice message"}
+          title={recording ? `Recording ${recording.elapsedSeconds}s — tap to send` : "Record voice message"}
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: "50%",
+            border: "1px solid var(--gray-200)",
+            background: recording ? "#FEE2E2" : "#fff",
+            color: recording ? "#DC2626" : "var(--gray-500)",
+            cursor: isLoading || isClosed ? "not-allowed" : "pointer",
+            opacity: isLoading || isClosed ? 0.5 : 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          {recording ? (
+            <span style={{ fontSize: 11, fontWeight: 600 }}>{recording.elapsedSeconds}s</span>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+            </svg>
+          )}
         </button>
         <input
           ref={inputRef}

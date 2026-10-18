@@ -6,6 +6,7 @@ import type {
   ChatbotTicketMode,
   ChatMessage,
   ChatbotState,
+  VoiceRecording,
 } from '@onedeskpro/chatbot-types';
 import { useChatbotContext } from '../context';
 
@@ -29,6 +30,8 @@ export interface UseChatbotReturn {
    * up in `messages` with `pending: true` and local previews until the uploads land.
    */
   sendAttachments: (files: File[], text?: string) => Promise<void>;
+  /** Sends a recorded voice note (record one with `VoiceRecorder` from `@onedeskpro/chatbot-core`). */
+  sendVoice: (recording: VoiceRecording) => Promise<void>;
   submitIdentify: (payload: { name: string; phone: string; email?: string }) => Promise<void>;
   /** Escalate the open AI ticket to a human agent (no-op unless mode is `ai`). */
   requestHuman: () => Promise<void>;
@@ -64,6 +67,10 @@ export function useChatbot(): UseChatbotReturn {
     (files: File[], text?: string) => instance.sendAttachments(files, text),
     [instance],
   );
+  const sendVoice = useCallback(
+    (recording: VoiceRecording) => instance.sendVoice(recording),
+    [instance],
+  );
   const submitIdentify = useCallback(
     (payload: { name: string; phone: string; email?: string }) =>
       instance.submitIdentify(payload),
@@ -89,6 +96,7 @@ export function useChatbot(): UseChatbotReturn {
     sessionId: state.visitorToken,
     sendMessage,
     sendAttachments,
+    sendVoice,
     submitIdentify,
     requestHuman,
     open,

@@ -17,6 +17,8 @@ describe('public API', () => {
       'SDK_UPLOAD_MAX_BYTES',
       'SdkSocket',
       'SessionManager',
+      'VOICE_MAX_DURATION_SECONDS',
+      'VoiceRecorder',
       'isChatbotRequestError',
       'resolveSdkSocketUrl',
     ];
