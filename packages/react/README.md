@@ -89,7 +89,7 @@ function SupportPanel() {
 
 | Field | Description |
 | --- | --- |
-| `messages` | The conversation. `message.type` is `'human'` (the visitor), `'ai'`, or `'agent'` (a human agent). |
+| `messages` | The conversation. `message.type` is `'human'` (the visitor), `'ai'`, or `'agent'` (a human agent). A media message carries `message.attachments` (`type`, `url`, `fileName`, `size`). |
 | `isOpen`, `isLoading`, `isReady` | Panel visibility, a request in flight, and whether the agent can answer. |
 | `needsIdentify` | `true` until the visitor has identified. `sendMessage` rejects while it is. |
 | `visitorToken`, `visitorName` | The identified visitor, or `null`. |
@@ -97,6 +97,7 @@ function SupportPanel() {
 | `blockReason`, `error` | Why the agent cannot answer (for example `server-unavailable` or `no-credits`), and the last error message. |
 | `submitIdentify({ name, phone, email? })` | Identifies the visitor and unlocks the chat. |
 | `sendMessage(text)` | Sends a message. |
+| `sendAttachments(files, text?)` | Sends up to 10 files (10 MB each) as one media message, with `text` as the caption. The message appears with `pending: true` and local previews until the uploads finish. |
 | `requestHuman()` | Escalates to a human agent. Does nothing unless `mode` is `'ai'` and a conversation has started. |
 | `resetSession()` | Clears a `closed` conversation. Does nothing in any other mode. |
 | `open()`, `close()`, `toggle()` | Control the built-in widget's panel. |

@@ -97,6 +97,7 @@ The IIFE build exposes a `window.OnedeskProChatbot` global:
 | `init(options)` | Mounts the widget and loads remote config. Returns a promise. |
 | `submitIdentify({ name, phone, email? })` | Identifies the visitor and unlocks the chat. Returns a promise. |
 | `sendMessage(text)` | Sends a message and, in `ai` mode, appends the reply. Returns a promise that rejects if the visitor has not identified. |
+| `sendAttachments(files, text?)` | Sends up to 10 files (10 MB each) as one media message, with `text` as the caption. Each file is uploaded through the API first; the message sits in `messages` with `pending: true` and local previews until then. Rejects if the visitor has not identified; a file over the limits sets `error` instead. |
 | `requestHuman()` | Escalates the conversation to a human agent. Does nothing unless the mode is `ai` and a conversation has started. Returns a promise. |
 | `open()` / `close()` / `toggle()` | Control widget visibility. |
 | `resetSession()` | Clears a `closed` conversation so the visitor can start a new one. Does nothing in any other mode. |
@@ -130,7 +131,7 @@ The IIFE build exposes a `window.OnedeskProChatbot` global:
 | `isReady` | `boolean` | The server answered and the agent can reply; the widget is on the page. |
 | `needsIdentify` | `boolean` | The visitor has not identified yet. |
 | `blockReason` | `ChatbotBlockReason` | Why the agent cannot answer, or `null`. See [When the widget appears](#when-the-widget-appears). |
-| `messages` | `ChatMessage[]` | The conversation so far. `message.type` is `'human'`, `'ai'`, or `'agent'`. |
+| `messages` | `ChatMessage[]` | The conversation so far. `message.type` is `'human'`, `'ai'`, or `'agent'`. A media message carries `message.attachments` (`type`, `url`, `fileName`, `size`) and `pending: true` while its files upload. |
 | `visitorToken` | `string \| null` | The identified visitor's token. |
 | `visitorName` | `string \| null` | The identified visitor's name. |
 | `mode` | `ChatbotTicketMode` | `'ai'`, `'waiting'`, `'human'`, or `'closed'`. |
@@ -158,7 +159,7 @@ off(); // unsubscribe
 
 ## Also exported
 
-`ApiClient`, `SdkSocket`, `resolveSdkSocketUrl`, `EventEmitter`, `SessionManager`, `isChatbotRequestError`, `DEFAULT_API_BASE_URL`, `DEFAULT_REQUEST_TIMEOUT_MS`, the `ChatbotRequestError` and `SdkSocketConnectOptions` types, and every type from `@onedeskpro/chatbot-types`.
+`ApiClient`, `SdkSocket`, `resolveSdkSocketUrl`, `EventEmitter`, `SessionManager`, `isChatbotRequestError`, `DEFAULT_API_BASE_URL`, `DEFAULT_REQUEST_TIMEOUT_MS`, `SDK_UPLOAD_MAX_BYTES`, `SDK_CHAT_MAX_ATTACHMENTS`, the `ChatbotRequestError` and `SdkSocketConnectOptions` types, and every type from `@onedeskpro/chatbot-types`.
 
 `SessionManager` is deprecated. It is now the visitor token store and is kept only so existing imports keep resolving.
 

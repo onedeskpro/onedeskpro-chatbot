@@ -1,3 +1,6 @@
+import type { ChatAttachment } from '@onedeskpro/chatbot-types';
+import { formatFileSize, isAutoCaption, isSafeAttachmentUrl } from '../attachments';
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -194,9 +197,121 @@ export function requestHumanIcon(): string {
   </svg>`;
 }
 
-export function buildMessageEl(content: string, type: 'human' | 'ai' | 'agent'): HTMLElement {
+export function plusIcon(): string {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+    <line x1="12" y1="5" x2="12" y2="19"/>
+    <line x1="5" y1="12" x2="19" y2="12"/>
+  </svg>`;
+}
+
+export function paperclipIcon(): string {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+  </svg>`;
+}
+
+export function imageIcon(): string {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+    <circle cx="8.5" cy="8.5" r="1.5"/>
+    <polyline points="21 15 16 10 5 21"/>
+  </svg>`;
+}
+
+export function fileIcon(): string {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+    <polyline points="14 2 14 8 20 8"/>
+  </svg>`;
+}
+
+/** What a bubble needs from a `ChatMessage`: its `message` plus the upload flag. */
+export interface RenderableMessage {
+  type: 'human' | 'ai' | 'agent';
+  content: string;
+  attachments?: ChatAttachment[];
+  pending?: boolean;
+}
+
+/**
+ * One attachment inside a bubble. URLs come from the API (or a local `blob:` preview)
+ * and are only ever assigned through DOM properties after a scheme check — never
+ * interpolated into markup.
+ */
+function buildAttachmentEl(attachment: ChatAttachment): HTMLElement {
+  const url = isSafeAttachmentUrl(attachment.url) ? attachment.url : '';
+  const type = attachment.type.toLowerCase();
+
+  if (url && type.startsWith('image/')) {
+    const link = document.createElement('a');
+    link.className = 'ttcb-attachment ttcb-attachment-image';
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.setAttribute('aria-label', `Open ${attachment.fileName}`);
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = attachment.fileName;
+    img.loading = 'lazy';
+    link.appendChild(img);
+    return link;
+  }
+
+  if (url && type.startsWith('video/')) {
+    const video = document.createElement('video');
+    video.className = 'ttcb-attachment ttcb-attachment-video';
+    video.controls = true;
+    video.preload = 'metadata';
+    video.src = url;
+    video.setAttribute('aria-label', attachment.fileName);
+    return video;
+  }
+
+  if (url && type.startsWith('audio/')) {
+    const audio = document.createElement('audio');
+    audio.className = 'ttcb-attachment ttcb-attachment-audio';
+    audio.controls = true;
+    audio.preload = 'metadata';
+    audio.src = url;
+    audio.setAttribute('aria-label', attachment.fileName);
+    return audio;
+  }
+
+  const chip = document.createElement(url ? 'a' : 'div');
+  chip.className = 'ttcb-attachment ttcb-attachment-file';
+  if (chip instanceof HTMLAnchorElement) {
+    chip.href = url;
+    chip.target = '_blank';
+    chip.rel = 'noopener noreferrer';
+  }
+  const icon = document.createElement('span');
+  icon.className = 'ttcb-attachment-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = fileIcon();
+  const meta = document.createElement('span');
+  meta.className = 'ttcb-attachment-meta';
+  const name = document.createElement('span');
+  name.className = 'ttcb-attachment-name';
+  name.textContent = attachment.fileName;
+  meta.appendChild(name);
+  const size = formatFileSize(attachment.size);
+  if (size) {
+    const sizeEl = document.createElement('span');
+    sizeEl.className = 'ttcb-attachment-size';
+    sizeEl.textContent = size;
+    meta.appendChild(sizeEl);
+  }
+  chip.appendChild(icon);
+  chip.appendChild(meta);
+  return chip;
+}
+
+export function buildMessageEl(message: RenderableMessage): HTMLElement {
+  const { type, content } = message;
+  const attachments = message.attachments ?? [];
   const wrapper = document.createElement('div');
   wrapper.className = `ttcb-msg ${type}`;
+  if (message.pending) wrapper.classList.add('ttcb-pending');
 
   const avatar = document.createElement('div');
   avatar.className = 'ttcb-msg-avatar';
@@ -218,14 +333,32 @@ export function buildMessageEl(content: string, type: 'human' | 'ai' | 'agent'):
     column.appendChild(label);
   }
 
-  const bubble = document.createElement('div');
-  bubble.className = 'ttcb-bubble';
-  if (type === 'human') {
-    bubble.textContent = content;
-  } else {
-    bubble.innerHTML = parseMarkdown(content);
+  if (attachments.length > 0) {
+    const list = document.createElement('div');
+    list.className = 'ttcb-attachments';
+    for (const attachment of attachments) {
+      list.appendChild(buildAttachmentEl(attachment));
+    }
+    column.appendChild(list);
   }
-  column.appendChild(bubble);
+
+  if (attachments.length === 0 || !isAutoCaption(content, attachments)) {
+    const bubble = document.createElement('div');
+    bubble.className = 'ttcb-bubble';
+    if (type === 'human') {
+      bubble.textContent = content;
+    } else {
+      bubble.innerHTML = parseMarkdown(content);
+    }
+    column.appendChild(bubble);
+  }
+
+  if (message.pending) {
+    const status = document.createElement('span');
+    status.className = 'ttcb-msg-status';
+    status.textContent = 'Uploading…';
+    column.appendChild(status);
+  }
 
   wrapper.appendChild(avatar);
   wrapper.appendChild(column);

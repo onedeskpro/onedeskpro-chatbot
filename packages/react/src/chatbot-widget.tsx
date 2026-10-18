@@ -30,6 +30,7 @@ export interface ChatbotHeadlessProps {
     isOpen: boolean;
     messages: ReturnType<typeof useChatbot>['messages'];
     sendMessage: (text: string) => Promise<void>;
+    sendAttachments: (files: File[], text?: string) => Promise<void>;
     isLoading: boolean;
     error: string | null;
     close: () => void;
@@ -41,11 +42,12 @@ export interface ChatbotHeadlessProps {
  * via render props. All state comes from useChatbot() internally.
  */
 export function ChatbotHeadless({ renderLauncher, renderWindow }: ChatbotHeadlessProps) {
-  const { isOpen, toggle, open, close, messages, sendMessage, isLoading, error } = useChatbot();
+  const { isOpen, toggle, open, close, messages, sendMessage, sendAttachments, isLoading, error } =
+    useChatbot();
   return (
     <>
       {renderLauncher({ isOpen, toggle, open, close })}
-      {renderWindow({ isOpen, messages, sendMessage, isLoading, error, close })}
+      {renderWindow({ isOpen, messages, sendMessage, sendAttachments, isLoading, error, close })}
     </>
   );
 }

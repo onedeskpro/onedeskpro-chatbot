@@ -1,14 +1,22 @@
 import type {
+  ChatAttachment,
   ChatbotEventMap,
   ChatbotInitOptions,
   ChatbotState,
   ChatbotTicketMode,
   ChatMessage,
+  ChatRequest,
   IdentifyRequest,
   SdkConfigResponse,
   TicketStatusData,
 } from '@onedeskpro/chatbot-types';
 import { ApiClient, DEFAULT_REQUEST_TIMEOUT_MS, isChatbotRequestError } from './api-client';
+import {
+  attachmentProblem,
+  extractAttachments,
+  revokePreviewUrl,
+  toPreviewAttachment,
+} from './attachments';
 import { DEFAULT_API_BASE_URL } from './constants';
 import { EventEmitter } from './event-emitter';
 import { SdkSocket } from './sdk-socket';
@@ -91,6 +99,16 @@ function extractAgentText(payload: unknown): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Identity of a message for de-duplication: the same text with the same files.
+ * Two media messages that only share a caption (or the inbox's "Image" label)
+ * are different messages.
+ */
+function messageKey(message: { content: string; attachments?: ChatAttachment[] }): string {
+  const urls = (message.attachments ?? []).map((attachment) => attachment.url).join('\u0001');
+  return `${message.content}\u0000${urls}`;
 }
 
 /** The server id of a `message:receive` payload, when it carries one. */
@@ -281,6 +299,7 @@ export class ChatbotCore {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
     this.widget = new ChatWidget(this.options, {
       onSend: (text) => void this.sendMessage(text),
+      onSendAttachments: (files, text) => void this.sendAttachments(files, text),
       onIdentify: (payload) => void this.submitIdentify(payload),
       onOpen: () => {
         this.setState({ isOpen: true });
@@ -404,12 +423,13 @@ export class ChatbotCore {
   private handleMessageReceive(payload: unknown): void {
     if (this._state.mode === 'ai') return;
 
-    const content = extractAgentText(payload);
-    if (!content) return;
+    const content = extractAgentText(payload) ?? '';
+    const attachments = extractAttachments(payload);
+    if (!content && attachments.length === 0) return;
 
     const pushId = extractMessageId(payload);
     const last = this._state.messages[this._state.messages.length - 1];
-    if (last?.message.content === content) {
+    if (last && messageKey(last.message) === messageKey({ content, attachments })) {
       if (last.message.type === 'ai') return;
       // Without an id there is no telling a redelivery from a repeat; drop it.
       if (last.message.type === 'agent' && (!pushId || pushId === this.lastPushId)) return;
@@ -420,7 +440,11 @@ export class ChatbotCore {
     const agentMsg: ChatMessage = {
       id: localMessageId(),
       sessionId: visitorToken,
-      message: { type: 'agent', content },
+      message: {
+        type: 'agent',
+        content,
+        ...(attachments.length > 0 ? { attachments } : {}),
+      },
     };
     this.setState({ messages: [...this._state.messages, agentMsg] });
     this.widget?.appendMessage(agentMsg);
@@ -487,11 +511,40 @@ export class ChatbotCore {
     }
   }
 
-  async sendMessage(text: string): Promise<void> {
+  /** The visitor token every send needs; throws when the visitor has not identified. */
+  private requireVisitorToken(method: string): string {
     const visitorToken = this.visitorTokens.get() ?? this._state.visitorToken;
     if (!this.apiClient || !visitorToken) {
-      throw new Error('[onedeskpro-chatbot] Identify before sendMessage().');
+      throw new Error(`[onedeskpro-chatbot] Identify before ${method}().`);
     }
+    return visitorToken;
+  }
+
+  /** Adds the visitor's own message optimistically and marks a send in flight. */
+  private pushLocalMessage(message: ChatMessage): void {
+    this.setState({
+      messages: [...this._state.messages, message],
+      isLoading: true,
+      error: null,
+    });
+    this.widget?.appendMessage(message);
+    this.emitter.emit('message', message);
+  }
+
+  private replaceMessage(id: number, next: ChatMessage): void {
+    this.setState({
+      messages: this._state.messages.map((message) => (message.id === id ? next : message)),
+    });
+    this.widget?.replaceMessage(id, next);
+  }
+
+  private removeMessage(id: number): void {
+    this.setState({ messages: this._state.messages.filter((message) => message.id !== id) });
+    this.widget?.removeMessage(id);
+  }
+
+  async sendMessage(text: string): Promise<void> {
+    const visitorToken = this.requireVisitorToken('sendMessage');
 
     if (this._state.mode === 'closed') {
       this.setState({ error: 'Conversation is closed' });
@@ -507,22 +560,84 @@ export class ChatbotCore {
       message: { type: 'human', content },
     };
     const modeAtSend = this._state.mode;
+    this.pushLocalMessage(optimistic);
     // Typing / AI-wait spinner only makes sense while AI owns the episode.
-    const showTyping = modeAtSend === 'ai';
-    this.setState({
-      messages: [...this._state.messages, optimistic],
-      isLoading: true,
-      error: null,
-    });
-    this.widget?.appendMessage(optimistic);
-    if (showTyping) this.widget?.setLoading(true);
-    this.emitter.emit('message', optimistic);
+    if (modeAtSend === 'ai') this.widget?.setLoading(true);
 
+    await this.deliver({ chatInput: content, visitorToken }, modeAtSend);
+  }
+
+  /**
+   * Sends `files` as one media message, with `text` as its caption. The bubble
+   * appears at once with local previews, uploads each file through the API, then
+   * posts the chat message the same way `sendMessage` does. Rejects when the visitor
+   * has not identified; a file that breaks the size or count limit is reported as
+   * `state.error` (and an `error` event) without sending anything.
+   */
+  async sendAttachments(files: File[], text = ''): Promise<void> {
+    const visitorToken = this.requireVisitorToken('sendAttachments');
+
+    if (this._state.mode === 'closed') {
+      this.setState({ error: 'Conversation is closed' });
+      return;
+    }
+
+    if (files.length === 0 || this._state.isLoading || this._state.needsIdentify) return;
+
+    const problem = attachmentProblem(files);
+    if (problem) {
+      this.setState({ error: problem });
+      this.widget?.showComposeError(problem);
+      this.emitter.emit('error', new Error(problem));
+      return;
+    }
+
+    const caption = text.trim();
+    const previews = files.map(toPreviewAttachment);
+    const optimistic: ChatMessage = {
+      id: localMessageId(),
+      sessionId: visitorToken,
+      message: { type: 'human', content: caption, attachments: previews },
+      pending: true,
+    };
+    const modeAtSend = this._state.mode;
+    this.pushLocalMessage(optimistic);
+
+    const uploaded: ChatAttachment[] = [];
     try {
-      const response = await this.apiClient.sendMessage({
-        chatInput: content,
-        visitorToken,
-      });
+      for (const file of files) {
+        uploaded.push(await this.apiClient.uploadAttachment(file, visitorToken));
+      }
+    } catch (err) {
+      // Nothing reached the conversation, so the bubble goes away with the error.
+      this.removeMessage(optimistic.id);
+      for (const preview of previews) revokePreviewUrl(preview.url);
+      const error = err instanceof Error ? err : new Error(String(err));
+      this.setState({ error: error.message, isLoading: false });
+      this.widget?.showComposeError(error.message);
+      this.emitter.emit('error', error);
+      return;
+    }
+
+    const sent: ChatMessage = {
+      ...optimistic,
+      pending: false,
+      message: { ...optimistic.message, attachments: uploaded },
+    };
+    this.replaceMessage(optimistic.id, sent);
+    for (const preview of previews) revokePreviewUrl(preview.url);
+    if (modeAtSend === 'ai') this.widget?.setLoading(true);
+
+    await this.deliver({ chatInput: caption, visitorToken, attachments: uploaded }, modeAtSend);
+  }
+
+  /**
+   * Posts `payload` to `/sdk/chat` and applies the outcome: the ticket now exists,
+   * the mode may have moved, and in `ai` mode the reply becomes a bubble.
+   */
+  private async deliver(payload: ChatRequest, modeAtSend: ChatbotTicketMode): Promise<void> {
+    try {
+      const response = await this.apiClient.sendMessage(payload);
 
       // Successful chat creates or continues a ticket episode.
       this.hasActiveTicket = true;

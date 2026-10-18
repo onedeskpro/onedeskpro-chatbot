@@ -24,6 +24,11 @@ export interface UseChatbotReturn {
   /** @deprecated Use visitorToken. */
   sessionId: string | null;
   sendMessage: (text: string) => Promise<void>;
+  /**
+   * Sends files as one media message, with `text` as the caption. The message shows
+   * up in `messages` with `pending: true` and local previews until the uploads land.
+   */
+  sendAttachments: (files: File[], text?: string) => Promise<void>;
   submitIdentify: (payload: { name: string; phone: string; email?: string }) => Promise<void>;
   /** Escalate the open AI ticket to a human agent (no-op unless mode is `ai`). */
   requestHuman: () => Promise<void>;
@@ -55,6 +60,10 @@ export function useChatbot(): UseChatbotReturn {
     (text: string) => instance.sendMessage(text),
     [instance],
   );
+  const sendAttachments = useCallback(
+    (files: File[], text?: string) => instance.sendAttachments(files, text),
+    [instance],
+  );
   const submitIdentify = useCallback(
     (payload: { name: string; phone: string; email?: string }) =>
       instance.submitIdentify(payload),
@@ -79,6 +88,7 @@ export function useChatbot(): UseChatbotReturn {
     mode: state.mode,
     sessionId: state.visitorToken,
     sendMessage,
+    sendAttachments,
     submitIdentify,
     requestHuman,
     open,

@@ -13,6 +13,8 @@ describe('public API', () => {
       'DEFAULT_REQUEST_TIMEOUT_MS',
       'EventEmitter',
       'OnedeskProChatbot',
+      'SDK_CHAT_MAX_ATTACHMENTS',
+      'SDK_UPLOAD_MAX_BYTES',
       'SdkSocket',
       'SessionManager',
       'isChatbotRequestError',

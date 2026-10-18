@@ -495,6 +495,100 @@ export function buildStyles(primaryColor: string, theme: 'light' | 'dark' | 'aut
       flex-shrink: 0;
     }
 
+    .ttcb-form { align-items: center; }
+    .ttcb-attach { position: relative; flex-shrink: 0; }
+    .ttcb-attach-btn {
+      width: 38px; height: 38px; border-radius: 8px;
+      border: 1px solid var(--ttcb-border);
+      background: var(--ttcb-input-bg); color: var(--ttcb-text-muted);
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .ttcb-attach-btn:hover { color: var(--ttcb-text); }
+    .ttcb-attach-btn:focus-visible { border-color: ${primaryColor}; outline: none; }
+    .ttcb-attach-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .ttcb-attach-btn svg { width: 18px; height: 18px; }
+    .ttcb-attach-menu {
+      display: none; position: absolute; left: 0; bottom: calc(100% + 8px);
+      min-width: 170px; padding: 4px;
+      background: var(--ttcb-bg);
+      border: 1px solid var(--ttcb-border); border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      z-index: 1;
+    }
+    .ttcb-attach-menu.open { display: flex; flex-direction: column; }
+    .ttcb-attach-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 10px; border: none; border-radius: 8px;
+      background: none; cursor: pointer;
+      font-family: inherit; font-size: 13px; color: var(--ttcb-text);
+      text-align: left; width: 100%;
+    }
+    .ttcb-attach-item:hover, .ttcb-attach-item:focus-visible {
+      background: var(--ttcb-bg-secondary); outline: none;
+    }
+    .ttcb-attach-item svg { width: 16px; height: 16px; color: var(--ttcb-text-muted); flex-shrink: 0; }
+    .ttcb-file-input { display: none; }
+
+    .ttcb-pending-tray { display: none; gap: 8px; flex-wrap: wrap; padding-bottom: 10px; }
+    .ttcb-pending-tray.visible { display: flex; }
+    .ttcb-pending-item {
+      display: flex; align-items: center; gap: 8px; max-width: 100%;
+      padding: 5px 6px 5px 5px;
+      border: 1px solid var(--ttcb-border); border-radius: 10px;
+      background: var(--ttcb-bg-secondary);
+      font-size: 12px; color: var(--ttcb-text);
+    }
+    .ttcb-pending-thumb {
+      width: 36px; height: 36px; border-radius: 6px; object-fit: cover;
+      flex-shrink: 0; background: var(--ttcb-bg);
+    }
+    .ttcb-pending-icon {
+      width: 36px; height: 36px; border-radius: 6px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--ttcb-bg); color: var(--ttcb-text-muted);
+    }
+    .ttcb-pending-icon svg { width: 18px; height: 18px; }
+    .ttcb-pending-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ttcb-pending-remove {
+      width: 22px; height: 22px; border-radius: 50%; border: none; flex-shrink: 0;
+      background: var(--ttcb-bg); color: var(--ttcb-text-muted); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ttcb-pending-remove:hover { color: var(--ttcb-text); }
+    .ttcb-pending-remove svg { width: 12px; height: 12px; fill: currentColor; }
+    .ttcb-compose-error { display: none; font-size: 12px; color: #ef4444; padding-bottom: 8px; }
+    .ttcb-compose-error.visible { display: block; }
+
+    .ttcb-attachments { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
+    .ttcb-msg.human .ttcb-attachments { align-items: flex-end; }
+    .ttcb-attachment-image {
+      display: block; max-width: 220px; border-radius: 12px; overflow: hidden;
+      border: 1px solid var(--ttcb-border); background: var(--ttcb-bg-secondary);
+    }
+    .ttcb-attachment-image img { display: block; max-width: 100%; max-height: 240px; object-fit: cover; }
+    .ttcb-attachment-video { display: block; max-width: 220px; border-radius: 12px; background: #000; }
+    .ttcb-attachment-audio { display: block; width: 220px; max-width: 100%; }
+    .ttcb-attachment-file {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; max-width: 240px;
+      border: 1px solid var(--ttcb-border); border-radius: 12px;
+      background: var(--ttcb-bg); color: var(--ttcb-text);
+      text-decoration: none; font-size: 13px;
+    }
+    a.ttcb-attachment-file:hover { border-color: ${primaryColor}; }
+    .ttcb-attachment-icon {
+      width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--ttcb-bg-secondary); color: var(--ttcb-text-muted);
+    }
+    .ttcb-attachment-icon svg { width: 16px; height: 16px; }
+    .ttcb-attachment-meta { display: flex; flex-direction: column; min-width: 0; }
+    .ttcb-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .ttcb-attachment-size { font-size: 11px; color: var(--ttcb-text-muted); }
+    .ttcb-msg.ttcb-pending .ttcb-attachments, .ttcb-msg.ttcb-pending .ttcb-bubble { opacity: 0.6; }
+    .ttcb-msg-status { font-size: 11px; color: var(--ttcb-text-muted); padding: 0 2px; }
+
     .ttcb-footer.hidden, .ttcb-messages.hidden { display: none; }
 
     @media (max-width: 440px) {

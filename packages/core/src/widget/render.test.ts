@@ -8,7 +8,7 @@ type RenderedType = 'ai' | 'agent';
  * against real DOM rather than the HTML string (rule 26).
  */
 function bubble(content: string, type: RenderedType | 'human' = 'ai'): HTMLElement {
-  const el = buildMessageEl(content, type);
+  const el = buildMessageEl({ type, content });
   return el.querySelector('.ttcb-bubble') as HTMLElement;
 }
 
@@ -122,5 +122,67 @@ describe('buildMessageEl', () => {
         expect(a.getAttribute('href')).toMatch(/^https?:\/\//);
       }
     });
+  });
+});
+
+describe('buildMessageEl attachments', () => {
+  const png = { type: 'image/png', url: 'https://cdn.example.com/a.png', fileName: 'a.png', size: 2048 };
+
+  it('should render an image attachment as a linked thumbnail when the url is https', () => {
+    // Arrange / Act
+    const el = buildMessageEl({ type: 'human', content: 'a.png', attachments: [png] });
+
+    // Assert
+    const link = el.querySelector('a.ttcb-attachment-image') as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe(png.url);
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.querySelector('img')?.getAttribute('src')).toBe(png.url);
+    // The file name is only the picker's label, not a caption worth repeating.
+    expect(el.querySelector('.ttcb-bubble')).toBeNull();
+  });
+
+  it('should show the caption with the attachment when the text is more than the file name', () => {
+    // Arrange / Act
+    const el = buildMessageEl({ type: 'agent', content: 'Here you go', attachments: [png] });
+
+    // Assert
+    expect(el.querySelector('.ttcb-bubble')?.textContent).toBe('Here you go');
+    expect(el.querySelector('.ttcb-attachment-image')).not.toBeNull();
+  });
+
+  it('should render a file chip without a link when the url scheme is not allowed', () => {
+    // Arrange
+    const bad = { type: 'image/png', url: 'javascript:alert(1)', fileName: 'x.png', size: 1 };
+
+    // Act
+    const el = buildMessageEl({ type: 'agent', content: '', attachments: [bad] });
+
+    // Assert
+    expect(el.querySelector('a')).toBeNull();
+    expect(el.querySelector('img')).toBeNull();
+    expect(el.querySelector('.ttcb-attachment-file')?.textContent).toContain('x.png');
+  });
+
+  it('should render a document as a download chip with its size when the type is not media', () => {
+    // Arrange
+    const pdf = { type: 'application/pdf', url: 'https://cdn.example.com/r.pdf', fileName: 'r.pdf', size: 3 * 1024 * 1024 };
+
+    // Act
+    const el = buildMessageEl({ type: 'human', content: '', attachments: [pdf] });
+
+    // Assert
+    const chip = el.querySelector('a.ttcb-attachment-file') as HTMLAnchorElement;
+    expect(chip.getAttribute('href')).toBe(pdf.url);
+    expect(chip.textContent).toContain('r.pdf');
+    expect(chip.textContent).toContain('3.0 MB');
+  });
+
+  it('should mark the bubble as uploading when the message is pending', () => {
+    // Arrange / Act
+    const el = buildMessageEl({ type: 'human', content: '', attachments: [png], pending: true });
+
+    // Assert
+    expect(el.classList.contains('ttcb-pending')).toBe(true);
+    expect(el.textContent).toContain('Uploading…');
   });
 });

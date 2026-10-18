@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { buildEnvelope } from '../factories/api-response.factory';
-import { buildChatResponse, buildTicketStatus } from '../factories/chat.factory';
+import { buildAttachment, buildChatResponse, buildTicketStatus } from '../factories/chat.factory';
 import { buildSdkConfig } from '../factories/sdk-config.factory';
 import { buildIdentifyResponse, buildVisitorVerify } from '../factories/visitor.factory';
 
@@ -18,4 +18,5 @@ export const handlers = [
   http.get(sdkUrl('ticket-status'), () => ok(buildTicketStatus())),
   http.post(sdkUrl('human-request'), () => ok(buildTicketStatus({ mode: 'waiting' }))),
   http.post(sdkUrl('chat'), () => ok(buildChatResponse())),
+  http.post(sdkUrl('upload'), () => ok(buildAttachment())),
 ];

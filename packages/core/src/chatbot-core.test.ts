@@ -1,7 +1,7 @@
 import type { ChatbotState, ChatMessage, TicketStatusData } from '@onedeskpro/chatbot-types';
 import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
-import { buildChatResponse, buildTicketStatus } from '../test/factories/chat.factory';
+import { buildAttachment, buildChatResponse, buildTicketStatus } from '../test/factories/chat.factory';
 import { buildSdkConfig } from '../test/factories/sdk-config.factory';
 import {
   buildVisitorVerify,
@@ -12,8 +12,9 @@ import {
 import { ok, sdkUrl } from '../test/mocks/handlers';
 import { server } from '../test/mocks/server';
 import { sockets } from '../test/mocks/socket';
-import { widgetText } from '../test/shadow-root';
+import { widgetRoot, widgetText } from '../test/shadow-root';
 import { ChatbotCore, READINESS_RETRY_DELAYS_MS } from './chatbot-core';
+import { SDK_UPLOAD_MAX_BYTES } from './constants';
 
 const hostCount = () => document.querySelectorAll('#onedeskpro-chatbot-host').length;
 
@@ -501,6 +502,192 @@ describe('ChatbotCore', () => {
       expect(afterTimeout.isLoading).toBe(false);
       expect(afterTimeout.error).toMatch(/timed out/i);
       expect(core.getState().messages.some((m) => m.message.content === 'AI reply')).toBe(true);
+      core.destroy();
+    });
+  });
+
+  describe('sendAttachments', () => {
+    const png = () => new File(['png'], 'photo.png', { type: 'image/png' });
+
+    it('should reject when called before identify', async () => {
+      // Arrange
+      const core = new ChatbotCore();
+      await core.init({ apiKey: 'k' });
+
+      // Act
+      const result = core.sendAttachments([png()]);
+
+      // Assert
+      await expect(result).rejects.toThrow(/Identify before sendAttachments/);
+      core.destroy();
+    });
+
+    it('should show a pending bubble, then the uploaded file and the AI reply when the upload lands', async () => {
+      // Arrange
+      const upload = deferred<void>();
+      const chatBodies: unknown[] = [];
+      server.use(
+        http.post(sdkUrl('upload'), async () => {
+          await upload.promise;
+          return ok(buildAttachment());
+        }),
+        http.post(sdkUrl('chat'), async ({ request }) => {
+          chatBodies.push(await request.json());
+          return ok(buildChatResponse({ text: 'Nice photo' }));
+        }),
+      );
+      const core = await initVerified();
+
+      // Act
+      const pending = core.sendAttachments([png()], 'look');
+
+      // Assert — while uploading
+      const mid = core.getState();
+      expect(mid.isLoading).toBe(true);
+      expect(mid.messages).toHaveLength(1);
+      expect(mid.messages[0].pending).toBe(true);
+      expect(mid.messages[0].message.attachments?.[0].fileName).toBe('photo.png');
+      expect(widgetText()).toContain('Uploading…');
+
+      upload.resolve();
+      await pending;
+
+      // Assert — after
+      const done = core.getState();
+      expect(done.isLoading).toBe(false);
+      expect(done.messages.map((m) => m.message.type)).toEqual(['human', 'ai']);
+      expect(done.messages[0].pending).toBe(false);
+      expect(done.messages[0].message.attachments).toEqual([buildAttachment()]);
+      expect(chatBodies).toEqual([
+        { chatInput: 'look', visitorToken: VISITOR_TOKEN, attachments: [buildAttachment()] },
+      ]);
+      expect(widgetText()).not.toContain('Uploading…');
+      expect(widgetRoot().querySelector('img')?.getAttribute('src')).toBe(buildAttachment().url);
+      core.destroy();
+    });
+
+    it('should report the limit and send nothing when a file is too large', async () => {
+      // Arrange
+      const requests: string[] = [];
+      server.use(
+        http.post(sdkUrl('upload'), () => {
+          requests.push('upload');
+          return ok(buildAttachment());
+        }),
+      );
+      const core = await initVerified();
+      const errors: Error[] = [];
+      core.on('error', (e) => errors.push(e));
+      const big = new File([new Uint8Array(SDK_UPLOAD_MAX_BYTES + 1)], 'big.png', { type: 'image/png' });
+
+      // Act
+      await core.sendAttachments([big]);
+
+      // Assert
+      expect(requests).toEqual([]);
+      expect(core.getState().messages).toEqual([]);
+      expect(core.getState().error).toContain('big.png');
+      expect(errors).toHaveLength(1);
+      core.destroy();
+    });
+
+    it('should drop the bubble and record the error when the upload is rejected', async () => {
+      // Arrange
+      server.use(
+        http.post(sdkUrl('upload'), () =>
+          HttpResponse.json(
+            { statusCode: 400, message: 'Unsupported file type', code: 'validation_failed' },
+            { status: 400 },
+          ),
+        ),
+      );
+      const core = await initVerified();
+
+      // Act
+      await core.sendAttachments([png()]);
+
+      // Assert
+      const state = core.getState();
+      expect(state.messages).toEqual([]);
+      expect(state.isLoading).toBe(false);
+      expect(state.error).toBe('Unsupported file type');
+      expect(widgetText()).toContain('Unsupported file type');
+      core.destroy();
+    });
+
+    it('should refuse to send files when the conversation is closed', async () => {
+      // Arrange
+      useTicketStatus(buildTicketStatus({ mode: 'closed' }));
+      const core = await initVerified();
+
+      // Act
+      await core.sendAttachments([png()]);
+
+      // Assert
+      expect(core.getState().messages).toEqual([]);
+      expect(core.getState().error).toBe('Conversation is closed');
+      core.destroy();
+    });
+  });
+
+  describe('agent media messages', () => {
+    it('should render the attachment when an agent pushes a media message', async () => {
+      // Arrange
+      useTicketStatus(buildTicketStatus({ mode: 'human', agentName: 'Ana' }));
+      const core = await initVerified();
+      const attachment = buildAttachment({ url: 'https://cdn.example.com/from-agent.png' });
+
+      // Act
+      sockets[0].serverEmit('message:receive', {
+        id: 'm1',
+        messageType: 'media',
+        textMessage: 'photo.png',
+        attachments: [attachment],
+      });
+
+      // Assert
+      const [message] = core.getState().messages;
+      expect(message.message.type).toBe('agent');
+      expect(message.message.attachments).toEqual([attachment]);
+      expect(widgetRoot().querySelector('img')?.getAttribute('src')).toBe(attachment.url);
+      core.destroy();
+    });
+
+    it('should keep both messages when an agent sends two different files with the same label', async () => {
+      // Arrange
+      useTicketStatus(buildTicketStatus({ mode: 'human', agentName: 'Ana' }));
+      const core = await initVerified();
+
+      // Act
+      sockets[0].serverEmit('message:receive', {
+        id: 'm1',
+        textMessage: 'Image',
+        attachments: [buildAttachment({ url: 'https://cdn.example.com/1.png' })],
+      });
+      sockets[0].serverEmit('message:receive', {
+        id: 'm2',
+        textMessage: 'Image',
+        attachments: [buildAttachment({ url: 'https://cdn.example.com/2.png' })],
+      });
+
+      // Assert
+      expect(core.getState().messages).toHaveLength(2);
+      core.destroy();
+    });
+
+    it('should ignore a pushed message that has neither text nor usable attachments', async () => {
+      // Arrange
+      useTicketStatus(buildTicketStatus({ mode: 'human', agentName: 'Ana' }));
+      const core = await initVerified();
+
+      // Act
+      sockets[0].serverEmit('message:receive', {
+        id: 'm1',
+        attachments: [{ type: 'image/png', url: 'javascript:alert(1)' }],
+      });
+
+      // Assert
+      expect(core.getState().messages).toEqual([]);
       core.destroy();
     });
   });

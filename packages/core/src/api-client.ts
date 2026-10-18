@@ -7,6 +7,7 @@ import type {
   IdentifyResponseData,
   SdkConfigResponse,
   TicketStatusData,
+  UploadAttachmentResponseData,
   VisitorVerifyResponse,
 } from '@onedeskpro/chatbot-types';
 
@@ -15,9 +16,13 @@ interface ApiClientOptions {
   apiKey: string;
   /** Abort a request that has not responded within this many milliseconds. */
   timeoutMs?: number;
+  /** Abort a file upload that has not completed within this many milliseconds. */
+  uploadTimeoutMs?: number;
 }
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+/** Uploads carry whole files, so they get longer than a JSON round-trip before aborting. */
+const DEFAULT_UPLOAD_TIMEOUT_MS = 120_000;
 
 /** An Error carrying the API's structured error body and the HTTP status. */
 export interface ChatbotRequestError extends Error {
@@ -30,6 +35,17 @@ function isApiError(value: unknown): value is ApiError {
     typeof value === 'object' &&
     value !== null &&
     typeof (value as ApiError).message === 'string'
+  );
+}
+
+function isUploadedAttachment(value: unknown): value is UploadAttachmentResponseData {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.type === 'string' &&
+    typeof record.url === 'string' &&
+    typeof record.fileName === 'string' &&
+    typeof record.size === 'number'
   );
 }
 
@@ -47,11 +63,13 @@ export class ApiClient {
   private baseUrl: string;
   private apiKey: string;
   private timeoutMs: number;
+  private uploadTimeoutMs: number;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
     this.apiKey = options.apiKey;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.uploadTimeoutMs = options.uploadTimeoutMs ?? DEFAULT_UPLOAD_TIMEOUT_MS;
   }
 
   private fail(message: string, status: number, code: string, path: string): never {
@@ -71,6 +89,7 @@ export class ApiClient {
     body?: unknown,
     params?: Record<string, string>,
     extraHeaders?: Record<string, string>,
+    timeoutMs = this.timeoutMs,
   ): Promise<T> {
     const url = new URL(`${this.baseUrl}${path}`);
     if (params) {
@@ -79,8 +98,11 @@ export class ApiClient {
       }
     }
 
+    // A FormData body goes out as multipart; the browser sets that Content-Type
+    // itself because it has to generate the boundary.
+    const isMultipart = typeof FormData !== 'undefined' && body instanceof FormData;
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+      ...(isMultipart ? {} : { 'Content-Type': 'application/json' }),
       'X-API-Key': this.apiKey,
       ...extraHeaders,
     };
@@ -88,7 +110,7 @@ export class ApiClient {
     // Without this, a request that never resolves leaves the widget stuck in its
     // loading state with the input disabled and no way back short of a reload.
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     let res: Response;
     try {
@@ -96,12 +118,12 @@ export class ApiClient {
         method,
         headers,
         signal: controller.signal,
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(body !== undefined ? { body: isMultipart ? body : JSON.stringify(body) } : {}),
       });
     } catch (err) {
       if (controller.signal.aborted) {
         this.fail(
-          `Request timed out after ${this.timeoutMs}ms.`,
+          `Request timed out after ${timeoutMs}ms.`,
           0,
           'TIMEOUT',
           path,
@@ -164,6 +186,24 @@ export class ApiClient {
 
   async sendMessage(payload: ChatRequest): Promise<ChatResponseData> {
     return this.request<ChatResponseData>('POST', '/sdk/chat', payload);
+  }
+
+  /** Uploads one file for a media message; the result goes into `ChatRequest.attachments`. */
+  async uploadAttachment(file: File, visitorToken: string): Promise<UploadAttachmentResponseData> {
+    const body = new FormData();
+    body.append('file', file, file.name);
+    const data = await this.request<unknown>(
+      'POST',
+      '/sdk/upload',
+      body,
+      undefined,
+      { 'X-Visitor-Token': visitorToken },
+      this.uploadTimeoutMs,
+    );
+    if (!isUploadedAttachment(data)) {
+      this.fail('The server returned an unexpected upload response.', 200, 'BAD_RESPONSE', '/sdk/upload');
+    }
+    return data;
   }
 
   async fetchConfig(): Promise<SdkConfigResponse> {

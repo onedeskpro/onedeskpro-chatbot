@@ -14,6 +14,7 @@ export type {
   ChatbotInitOptions,
   ChatbotState,
   ChatMessage,
+  ChatAttachment,
   ChatbotEventMap,
   ChatbotTicketMode,
   TicketStatusData,

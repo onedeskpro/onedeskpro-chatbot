@@ -1,7 +1,7 @@
 import { delay, http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApiError } from '../test/factories/api-response.factory';
-import { buildChatResponse } from '../test/factories/chat.factory';
+import { buildAttachment, buildChatResponse } from '../test/factories/chat.factory';
 import { ok, sdkUrl } from '../test/mocks/handlers';
 import { server } from '../test/mocks/server';
 import { ApiClient, DEFAULT_REQUEST_TIMEOUT_MS, type ChatbotRequestError } from './api-client';
@@ -268,5 +268,64 @@ describe('ApiClient', () => {
         expect(error?.apiError.code).toBe('TIMEOUT');
       },
     );
+  });
+});
+
+describe('ApiClient.uploadAttachment', () => {
+  it('should post the file as multipart with the visitor token and unwrap the attachment when the upload succeeds', async () => {
+    // Arrange
+    const seen: Request[] = [];
+    const bodies: string[] = [];
+    server.use(
+      http.post(sdkUrl('upload'), async ({ request }) => {
+        seen.push(request);
+        bodies.push(await request.text());
+        return ok(buildAttachment());
+      }),
+    );
+    const file = new File(['png-bytes'], 'photo.png', { type: 'image/png' });
+
+    // Act
+    const result = await client().uploadAttachment(file, 'sv_token');
+
+    // Assert
+    expect(result).toEqual(buildAttachment());
+    expect(seen[0].headers.get('X-Visitor-Token')).toBe('sv_token');
+    expect(seen[0].headers.get('X-API-Key')).toBe('secret');
+    expect(seen[0].headers.get('Content-Type')).toMatch(/^multipart\/form-data; boundary=/);
+    // jsdom's File loses its name inside undici's FormData, so only the part name
+    // and type are checked here; browsers send the file name as well.
+    expect(bodies[0]).toContain('name="file"');
+    expect(bodies[0]).toContain('Content-Type: image/png');
+  });
+
+  it('should reject with BAD_RESPONSE when the upload reply is not an attachment', async () => {
+    // Arrange
+    server.use(http.post(sdkUrl('upload'), () => ok({ url: 123 })));
+    const file = new File(['x'], 'x.png', { type: 'image/png' });
+
+    // Act
+    const result = client().uploadAttachment(file, 'sv_token');
+
+    // Assert
+    await expect(result).rejects.toMatchObject({ apiError: { code: 'BAD_RESPONSE' } });
+  });
+
+  it('should surface the API error when the server rejects the file type', async () => {
+    // Arrange
+    server.use(
+      http.post(sdkUrl('upload'), () =>
+        HttpResponse.json(buildApiError({ statusCode: 400, message: 'Unsupported file type' }), {
+          status: 400,
+        }),
+      ),
+    );
+    const file = new File(['x'], 'x.exe', { type: 'application/x-msdownload' });
+
+    // Act
+    const result = client().uploadAttachment(file, 'sv_token');
+
+    // Assert
+    await expect(result).rejects.toMatchObject({ status: 400, message: 'Unsupported file type' });
   });
 });
