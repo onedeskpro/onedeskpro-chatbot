@@ -1,6 +1,6 @@
 {
   "name": "@onedeskpro/chatbot-core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Framework-independent core for the Onedesk Pro Chatbot SDK",
   "license": "MIT",
   "author": "Typetech IT <support@onedeskpro.com>",
