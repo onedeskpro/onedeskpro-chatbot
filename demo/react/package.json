@@ -12,8 +12,8 @@
     "@onedeskpro/chatbot-core": "workspace:*",
     "@onedeskpro/chatbot-react": "workspace:*",
     "@onedeskpro/chatbot-types": "workspace:*",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

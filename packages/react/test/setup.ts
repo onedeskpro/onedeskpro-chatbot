@@ -8,7 +8,7 @@ import { resetSocketMock } from './mocks/socket';
 // socket client because vitest.config.ts resolves the core package from source.
 vi.mock('socket.io-client', () => import('./mocks/socket'));
 
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 
 beforeEach(() => {
   localStorage.clear();

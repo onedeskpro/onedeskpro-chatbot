@@ -27,6 +27,40 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+/**
+ * Fake `setTimeout`/`clearTimeout` and count only the timers the SDK schedules.
+ *
+ * MSW 3 sends mocked requests through Node's real `fetch` (undici) and mocks the
+ * socket underneath. Undici re-arms its internal connection timer with the global
+ * `setTimeout`, so under fake timers that timer lands on the fake clock too. Leave
+ * it out of the count so cleanup assertions see SDK timers only. `vi.useRealTimers()`
+ * restores the real globals, which also removes this wrapper.
+ */
+function useFakeTimers() {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const fakeSetTimeout = globalThis.setTimeout;
+  const fakeClearTimeout = globalThis.clearTimeout;
+  const undiciTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  globalThis.setTimeout = ((handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) => {
+    if (!new Error().stack?.includes('node:internal/deps/undici')) {
+      return fakeSetTimeout(handler, timeout, ...args);
+    }
+    const id = fakeSetTimeout(() => {
+      undiciTimers.delete(id);
+      handler(...args);
+    }, timeout);
+    undiciTimers.add(id);
+    return id;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((id?: ReturnType<typeof setTimeout>) => {
+    if (id !== undefined) undiciTimers.delete(id);
+    fakeClearTimeout(id);
+  }) as typeof clearTimeout;
+
+  return { sdkTimerCount: () => vi.getTimerCount() - undiciTimers.size };
+}
+
 /** Answer `/sdk/ticket-status` with `status` for this test only. */
 const useTicketStatus = (status: TicketStatusData) =>
   server.use(http.get(sdkUrl('ticket-status'), () => ok(status)));
@@ -228,7 +262,7 @@ describe('ChatbotCore', () => {
 
     it('should stop retrying and announce ready when every retry fails', async () => {
       // Arrange
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const timers = useFakeTimers();
       const calls = useConfigReplies(unreachable);
       const core = new ChatbotCore();
       const readyEvents = vi.fn();
@@ -242,7 +276,7 @@ describe('ChatbotCore', () => {
       // Assert
       expect(calls.count).toBe(1 + READINESS_RETRY_DELAYS_MS.length);
       expect(readyEvents).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
+      expect(timers.sdkTimerCount()).toBe(0);
       expect(hostCount()).toBe(0);
       expect(core.getState()).toMatchObject({ isReady: false, blockReason: 'server-unavailable' });
       core.destroy();
@@ -250,7 +284,7 @@ describe('ChatbotCore', () => {
 
     it('should not retry when the server rejects the API key', async () => {
       // Arrange
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const timers = useFakeTimers();
       const calls = useConfigReplies(() =>
         HttpResponse.json(
           { statusCode: 401, code: 'unauthorized', message: 'Invalid API key', timestamp: '', path: '/sdk/config' },
@@ -265,7 +299,7 @@ describe('ChatbotCore', () => {
 
       // Assert
       expect(calls.count).toBe(1);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(timers.sdkTimerCount()).toBe(0);
       expect(hostCount()).toBe(0);
       expect(core.getState()).toMatchObject({ isReady: false, blockReason: null, error: 'Invalid API key' });
       core.destroy();
@@ -273,7 +307,7 @@ describe('ChatbotCore', () => {
 
     it('should cancel the pending retry when destroyed', async () => {
       // Arrange
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const timers = useFakeTimers();
       const calls = useConfigReplies(unreachable, ready);
       const core = new ChatbotCore();
       await core.init({ apiKey: 'k' });
@@ -284,7 +318,7 @@ describe('ChatbotCore', () => {
 
       // Assert
       expect(calls.count).toBe(1);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(timers.sdkTimerCount()).toBe(0);
       expect(hostCount()).toBe(0);
     });
   });
@@ -1049,7 +1083,7 @@ describe('ChatbotCore', () => {
 
     it('should leave no socket, listeners, timers or DOM nodes behind when destroyed', async () => {
       // Arrange
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const timers = useFakeTimers();
       const core = await initVerified();
       const [socket] = sockets;
       expect(socket.listenerCount()).toBeGreaterThan(0);
@@ -1064,7 +1098,7 @@ describe('ChatbotCore', () => {
       expect(socket.removeAllListeners).toHaveBeenCalledTimes(1);
       expect(socket.disconnect).toHaveBeenCalledTimes(1);
       expect(socket.listenerCount()).toBe(0);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(timers.sdkTimerCount()).toBe(0);
       expect(document.body.childElementCount).toBe(0);
     });
 
