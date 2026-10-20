@@ -7,7 +7,7 @@ import { installShadowRootCapture, restoreShadowRootCapture } from './shadow-roo
 // One shared socket.io-client mock for every test file (rule 25).
 vi.mock('socket.io-client', () => import('./mocks/socket'));
 
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 
 beforeEach(() => {
   localStorage.clear();
