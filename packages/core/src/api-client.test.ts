@@ -293,9 +293,8 @@ describe('ApiClient.uploadAttachment', () => {
     expect(seen[0].headers.get('X-Visitor-Token')).toBe('sv_token');
     expect(seen[0].headers.get('X-API-Key')).toBe('secret');
     expect(seen[0].headers.get('Content-Type')).toMatch(/^multipart\/form-data; boundary=/);
-    // jsdom's File loses its name inside undici's FormData, so only the part name
-    // and type are checked here; browsers send the file name as well.
     expect(bodies[0]).toContain('name="file"');
+    expect(bodies[0]).toContain('filename="photo.png"');
     expect(bodies[0]).toContain('Content-Type: image/png');
   });
 
