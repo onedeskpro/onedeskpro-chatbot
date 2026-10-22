@@ -1,3 +1,10 @@
+/**
+ * Phones (and landscape phones, which are short rather than narrow): the panel
+ * fills the screen instead of floating above the launcher. Shared with the widget
+ * so its focus handling switches at the same breakpoint as the layout.
+ */
+export const FULLSCREEN_MEDIA = '(max-width: 640px), (max-height: 500px) and (pointer: coarse)';
+
 export function buildStyles(primaryColor: string, theme: 'light' | 'dark' | 'auto'): string {
   const lightVars = `
     --ttcb-bg: #ffffff;
@@ -77,6 +84,7 @@ export function buildStyles(primaryColor: string, theme: 'light' | 'dark' | 'aut
       transition: opacity 0.2s ease, transform 0.25s ease, height 0.2s ease;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
+    .ttcb-panel:focus { outline: none; }
     .ttcb-panel.ttcb-mode-chat {
       height: 560px;
     }
@@ -225,7 +233,7 @@ export function buildStyles(primaryColor: string, theme: 'light' | 'dark' | 'aut
 
     .ttcb-msg { display: flex; gap: 8px; max-width: 100%; }
     .ttcb-msg.human { flex-direction: row-reverse; }
-    .ttcb-msg-body { display: flex; flex-direction: column; gap: 3px; max-width: 78%; }
+    .ttcb-msg-body { display: flex; flex-direction: column; gap: 3px; max-width: 78%; min-width: 0; }
     .ttcb-msg.human .ttcb-msg-body { align-items: flex-end; }
     .ttcb-msg-label {
       font-size: 11px; font-weight: 600; color: var(--ttcb-text-muted);
@@ -643,10 +651,69 @@ export function buildStyles(primaryColor: string, theme: 'light' | 'dark' | 'aut
 
     .ttcb-footer.hidden, .ttcb-messages.hidden { display: none; }
 
-    @media (max-width: 440px) {
-      .ttcb-panel { width: calc(100vw - 16px); right: 8px !important; left: 8px !important; bottom: 84px !important; }
-      .ttcb-fab.bottom-right { right: 16px; }
-      .ttcb-fab.bottom-left { left: 16px; }
+    @media ${FULLSCREEN_MEDIA} {
+      .ttcb-fab.bottom-right { right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+      .ttcb-fab.bottom-left { left: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+      /* The open panel covers the launcher; its own close button takes over. */
+      .ttcb-fab.ttcb-open { display: none; }
+
+      /*
+       * Full screen. Offsets instead of 100vw so a scrollbar never adds width, and
+       * pinned to the visual viewport (--ttcb-vv-*, set by the widget) so the
+       * on-screen keyboard shrinks the panel instead of pushing it off screen.
+       */
+      .ttcb-panel,
+      .ttcb-panel.bottom-right,
+      .ttcb-panel.bottom-left,
+      .ttcb-panel.ttcb-mode-chat,
+      .ttcb-panel.ttcb-mode-form,
+      .ttcb-panel.ttcb-mode-compact {
+        top: var(--ttcb-vv-top, 0px);
+        left: var(--ttcb-vv-left, 0px);
+        right: auto;
+        bottom: auto;
+        width: var(--ttcb-vv-width, 100%);
+        height: var(--ttcb-vv-height, 100%);
+        max-width: none;
+        max-height: none;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        transition: opacity 0.2s ease, transform 0.25s ease;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
+      .ttcb-header {
+        padding-top: max(14px, env(safe-area-inset-top, 0px));
+        padding-left: max(16px, env(safe-area-inset-left, 0px));
+        padding-right: max(16px, env(safe-area-inset-right, 0px));
+      }
+      .ttcb-close-btn { padding: 8px; }
+      .ttcb-close-btn svg { width: 22px; height: 22px; }
+      .ttcb-footer {
+        padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+        padding-left: max(12px, env(safe-area-inset-left, 0px));
+        padding-right: max(12px, env(safe-area-inset-right, 0px));
+      }
+      .ttcb-messages {
+        overflow-x: hidden;
+        overscroll-behavior: contain;
+      }
+      .ttcb-panel.ttcb-mode-form .ttcb-identify.visible {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-x: hidden;
+        overscroll-behavior: contain;
+        padding-bottom: max(14px, env(safe-area-inset-bottom, 0px));
+      }
+      .ttcb-country-list { overscroll-behavior: contain; }
+      .ttcb-field-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+      /* iOS zooms the page into any field under 16px, then leaves it zoomed and scrollable sideways. */
+      .ttcb-input,
+      .ttcb-identify-input,
+      .ttcb-phone-national,
+      .ttcb-country-search { font-size: 16px; }
     }
   `;
 }

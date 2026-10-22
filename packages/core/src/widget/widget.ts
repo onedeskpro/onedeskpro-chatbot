@@ -14,7 +14,7 @@ import {
   DIAL_COUNTRIES,
   type DialCountry,
 } from './countries';
-import { buildStyles } from './styles';
+import { buildStyles, FULLSCREEN_MEDIA } from './styles';
 import {
   arrowRightIcon,
   botIcon,
@@ -85,7 +85,9 @@ interface PendingFile {
 export class ChatWidget {
   private host!: HTMLElement;
   private shadow!: ShadowRoot;
+  private fab!: HTMLButtonElement;
   private panel!: HTMLElement;
+  private stopViewportSync: (() => void) | null = null;
   private messagesContainer!: HTMLElement;
   private identifyContainer!: HTMLElement;
   private footer!: HTMLElement;
@@ -157,15 +159,17 @@ export class ChatWidget {
     );
     this.shadow.appendChild(styleEl);
 
-    const fab = document.createElement('button');
-    fab.className = `ttcb-fab ${this.position}`;
-    fab.setAttribute('aria-label', 'Open chat');
-    fab.innerHTML = chatIcon();
-    fab.addEventListener('click', () => this.toggle());
-    this.shadow.appendChild(fab);
+    this.fab = document.createElement('button');
+    this.fab.className = `ttcb-fab ${this.position}`;
+    this.fab.setAttribute('aria-label', 'Open chat');
+    this.fab.innerHTML = chatIcon();
+    this.fab.addEventListener('click', () => this.toggle());
+    this.shadow.appendChild(this.fab);
 
     this.panel = document.createElement('div');
     this.panel.className = `ttcb-panel ${this.position} hidden ttcb-mode-compact`;
+    // Focus target on phones, where focusing a field would raise the keyboard on open.
+    this.panel.tabIndex = -1;
     this.panel.setAttribute('role', 'dialog');
     this.panel.setAttribute('aria-modal', 'true');
     this.panel.setAttribute('aria-label', options.chatbotName ?? 'AI Assistant');
@@ -1084,11 +1088,12 @@ export class ChatWidget {
         this.messagesContainer.appendChild(buildTypingIndicator());
         this.scrollToBottom();
       }
-      this.input.focus();
+      // On phones focusing raises the keyboard again after the visitor dismissed it to read.
+      if (!this.isFullScreen()) this.input.focus();
     } else {
       const el = this.shadow.getElementById('ttcb-typing');
       if (el) el.remove();
-      if (!this.input.disabled) {
+      if (!this.input.disabled && !this.isFullScreen()) {
         this.input.focus();
       }
     }
@@ -1117,8 +1122,13 @@ export class ChatWidget {
 
   open(): void {
     this.isOpen = true;
+    this.startViewportSync();
     this.panel.classList.remove('hidden');
-    if (this.identifyContainer.classList.contains('visible')) {
+    this.fab.classList.add('ttcb-open');
+    if (this.isFullScreen()) {
+      // The keyboard would cover half the screen before the visitor has read anything.
+      this.panel.focus({ preventScroll: true });
+    } else if (this.identifyContainer.classList.contains('visible')) {
       this.nameInput.focus();
     } else {
       this.input.focus();
@@ -1131,7 +1141,44 @@ export class ChatWidget {
     this.closeCountryPopover();
     this.closeAttachMenu();
     this.panel.classList.add('hidden');
+    this.fab.classList.remove('ttcb-open');
+    this.stopViewportSync?.();
+    this.stopViewportSync = null;
+    // Also blurs the field inside the now-hidden panel, which dismisses a phone keyboard.
+    this.fab.focus({ preventScroll: true });
     this.callbacks.onClose();
+  }
+
+  private isFullScreen(): boolean {
+    return typeof window.matchMedia === 'function' && window.matchMedia(FULLSCREEN_MEDIA).matches;
+  }
+
+  /**
+   * iOS Safari, and Chrome on Android since 108, leave the layout viewport alone when
+   * the keyboard opens and scroll the page instead, so a full-height fixed panel ends
+   * up half behind the keyboard. While open, mirror the visual viewport into CSS vars
+   * that the full-screen layout reads; the floating desktop panel ignores them.
+   */
+  private startViewportSync(): void {
+    const viewport = window.visualViewport;
+    if (!viewport || this.stopViewportSync) return;
+    const sync = () => {
+      const list = this.messagesContainer;
+      const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+      this.panel.style.setProperty('--ttcb-vv-top', `${viewport.offsetTop}px`);
+      this.panel.style.setProperty('--ttcb-vv-left', `${viewport.offsetLeft}px`);
+      this.panel.style.setProperty('--ttcb-vv-width', `${viewport.width}px`);
+      this.panel.style.setProperty('--ttcb-vv-height', `${viewport.height}px`);
+      // Keep the latest message in view when the keyboard shrinks the list.
+      if (atBottom) this.scrollToBottom();
+    };
+    viewport.addEventListener('resize', sync);
+    viewport.addEventListener('scroll', sync);
+    sync();
+    this.stopViewportSync = () => {
+      viewport.removeEventListener('resize', sync);
+      viewport.removeEventListener('scroll', sync);
+    };
   }
 
   toggle(): void {
@@ -1238,6 +1285,8 @@ export class ChatWidget {
 
   destroy(): void {
     this.destroyed = true;
+    this.stopViewportSync?.();
+    this.stopViewportSync = null;
     this.clearPendingFiles();
     this.recorder?.destroy();
     this.recorder = null;

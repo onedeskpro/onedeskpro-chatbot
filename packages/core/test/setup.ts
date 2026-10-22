@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from 'vitest';
 import { server } from './mocks/server';
 import { resetSocketMock } from './mocks/socket';
+import { stubMatchMedia } from './mocks/viewport';
 import { installShadowRootCapture, restoreShadowRootCapture } from './shadow-root';
 
 // One shared socket.io-client mock for every test file (rule 25).
@@ -13,6 +14,8 @@ beforeEach(() => {
   localStorage.clear();
   document.body.innerHTML = '';
   installShadowRootCapture();
+  // Desktop by default; phone-layout tests call stubMatchMedia(true).
+  stubMatchMedia(false);
 });
 
 afterEach(() => {
