@@ -74,11 +74,6 @@ export interface VoiceRecording {
   durationSeconds: number;
 }
 
-/** Largest file `POST /sdk/upload` accepts, in bytes. */
-export const SDK_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
-/** Most attachments one chat message may carry. */
-export const SDK_CHAT_MAX_ATTACHMENTS = 10;
-
 export interface ChatRequest {
   /** Visitor text; may be empty when `attachments` carry the message. */
   chatInput: string;

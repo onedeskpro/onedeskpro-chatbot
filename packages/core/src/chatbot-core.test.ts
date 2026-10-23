@@ -30,12 +30,15 @@ function deferred<T>() {
 /**
  * Fake `setTimeout`/`clearTimeout` and count only the timers the SDK schedules.
  *
- * MSW 3 sends mocked requests through Node's real `fetch` (undici) and mocks the
+ * MSW 3 sends mocked requests through the real `fetch` (undici) and mocks the
  * socket underneath. Undici re-arms its internal connection timer with the global
  * `setTimeout`, so under fake timers that timer lands on the fake clock too. Leave
- * it out of the count so cleanup assertions see SDK timers only. `vi.useRealTimers()`
- * restores the real globals, which also removes this wrapper.
+ * it out of the count so cleanup assertions see SDK timers only. The undici can be
+ * Node's bundled copy or the npm package jsdom installs, so match both stack paths.
+ * `vi.useRealTimers()` restores the real globals, which also removes this wrapper.
  */
+const UNDICI_FRAME = /node:internal\/deps\/undici|[\\/]node_modules[\\/]undici[\\/]/;
+
 function useFakeTimers() {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   const fakeSetTimeout = globalThis.setTimeout;
@@ -43,7 +46,7 @@ function useFakeTimers() {
   const undiciTimers = new Set<ReturnType<typeof setTimeout>>();
 
   globalThis.setTimeout = ((handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) => {
-    if (!new Error().stack?.includes('node:internal/deps/undici')) {
+    if (!UNDICI_FRAME.test(new Error().stack ?? '')) {
       return fakeSetTimeout(handler, timeout, ...args);
     }
     const id = fakeSetTimeout(() => {
