@@ -1,6 +1,6 @@
 {
 	"name": "@onedeskpro/chatbot-types",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"description": "Shared TypeScript types for the Onedesk Pro Chatbot SDK",
 	"license": "MIT",
 	"author": "Typetech IT <support@onedeskpro.com>",
