@@ -4,14 +4,14 @@
 	"description": "Shared TypeScript types for the Onedesk Pro Chatbot SDK",
 	"license": "MIT",
 	"author": "Typetech IT <support@onedeskpro.com>",
-	"homepage": "https://github.com/onedeskpro/onedeskpro-chatbot-sdk#readme",
+	"homepage": "https://github.com/onedeskpro/onedeskpro-chatbot#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/onedeskpro/onedeskpro-chatbot-sdk.git",
+		"url": "git+https://github.com/onedeskpro/onedeskpro-chatbot.git",
 		"directory": "packages/shared-types"
 	},
 	"bugs": {
-		"url": "https://github.com/onedeskpro/onedeskpro-chatbot-sdk/issues"
+		"url": "https://github.com/onedeskpro/onedeskpro-chatbot/issues"
 	},
 	"keywords": [
 		"onedeskpro",

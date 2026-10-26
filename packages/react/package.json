@@ -4,14 +4,14 @@
   "description": "React SDK for the Onedesk Pro Chatbot",
   "license": "MIT",
   "author": "Typetech IT <support@onedeskpro.com>",
-  "homepage": "https://github.com/onedeskpro/onedeskpro-chatbot-sdk#readme",
+  "homepage": "https://github.com/onedeskpro/onedeskpro-chatbot#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/onedeskpro/onedeskpro-chatbot-sdk.git",
+    "url": "git+https://github.com/onedeskpro/onedeskpro-chatbot.git",
     "directory": "packages/react"
   },
   "bugs": {
-    "url": "https://github.com/onedeskpro/onedeskpro-chatbot-sdk/issues"
+    "url": "https://github.com/onedeskpro/onedeskpro-chatbot/issues"
   },
   "keywords": [
     "onedeskpro",
