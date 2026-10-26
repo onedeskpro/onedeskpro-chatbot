@@ -17,6 +17,12 @@ export const handlers = [
   http.post(sdkUrl('identify'), () => ok(buildIdentifyResponse())),
   http.get(sdkUrl('ticket-status'), () => ok(buildTicketStatus())),
   http.post(sdkUrl('human-request'), () => ok(buildTicketStatus({ mode: 'waiting' }))),
+  http.post(sdkUrl('human-request/cancel'), () =>
+    ok(buildTicketStatus({ mode: 'ai', conversationId: 'c1' })),
+  ),
+  http.post(sdkUrl('conversation/close'), () =>
+    ok(buildTicketStatus({ mode: 'closed', conversationId: 'c1' })),
+  ),
   http.post(sdkUrl('chat'), () => ok(buildChatResponse())),
   http.post(sdkUrl('upload'), () => ok(buildAttachment())),
 ];

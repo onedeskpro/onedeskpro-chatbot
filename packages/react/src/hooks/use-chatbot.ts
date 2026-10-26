@@ -35,6 +35,10 @@ export interface UseChatbotReturn {
   submitIdentify: (payload: { name: string; phone: string; email?: string }) => Promise<void>;
   /** Escalate the open AI ticket to a human agent (no-op unless mode is `ai`). */
   requestHuman: () => Promise<void>;
+  /** Withdraw a pending human request so the AI answers again (no-op unless mode is `waiting`). */
+  cancelHumanRequest: () => Promise<void>;
+  /** End the current conversation in any mode and start a fresh one (clears `messages`). */
+  startNewConversation: () => Promise<void>;
   open: () => void;
   close: () => void;
   toggle: () => void;
@@ -77,6 +81,8 @@ export function useChatbot(): UseChatbotReturn {
     [instance],
   );
   const requestHuman = useCallback(() => instance.requestHuman(), [instance]);
+  const cancelHumanRequest = useCallback(() => instance.cancelHumanRequest(), [instance]);
+  const startNewConversation = useCallback(() => instance.startNewConversation(), [instance]);
   const open = useCallback(() => instance.open(), [instance]);
   const close = useCallback(() => instance.close(), [instance]);
   const toggle = useCallback(() => instance.toggle(), [instance]);
@@ -99,6 +105,8 @@ export function useChatbot(): UseChatbotReturn {
     sendVoice,
     submitIdentify,
     requestHuman,
+    cancelHumanRequest,
+    startNewConversation,
     open,
     close,
     toggle,

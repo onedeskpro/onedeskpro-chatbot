@@ -50,7 +50,8 @@ function SupportPanel() {
     sendMessage,
     submitIdentify,
     requestHuman,
-    resetSession,
+    cancelHumanRequest,
+    startNewConversation,
   } = useChatbot();
 
   if (!isReady) return null;
@@ -74,12 +75,18 @@ function SupportPanel() {
           {m.message.type}: {m.message.content}
         </p>
       ))}
-      {mode === 'waiting' && <p>Waiting for a human agent…</p>}
+      {mode === 'waiting' && (
+        <p>
+          Waiting for a human agent… <button onClick={cancelHumanRequest}>Cancel request</button>
+        </p>
+      )}
       <button onClick={() => sendMessage('Hello')} disabled={isLoading || mode === 'closed'}>
         Send
       </button>
       {mode === 'ai' && <button onClick={requestHuman}>Talk to a person</button>}
-      {mode === 'closed' && <button onClick={resetSession}>New conversation</button>}
+      <button onClick={startNewConversation} disabled={isLoading}>
+        New conversation
+      </button>
     </div>
   );
 }
@@ -100,6 +107,8 @@ function SupportPanel() {
 | `sendAttachments(files, text?)` | Sends up to 10 files (10 MB each) as one media message, with `text` as the caption. The message appears with `pending: true` and local previews until the uploads finish. |
 | `sendVoice(recording)` | Sends a voice note recorded with `VoiceRecorder` from `@onedeskpro/chatbot-core`. |
 | `requestHuman()` | Escalates to a human agent. Does nothing unless `mode` is `'ai'` and a conversation has started. |
+| `cancelHumanRequest()` | Withdraws a pending human request so the AI answers again. Does nothing unless `mode` is `'waiting'`. |
+| `startNewConversation()` | Ends the current conversation in any mode and starts a fresh one; `messages` is cleared and `mode` returns to `'ai'`. |
 | `resetSession()` | Clears a `closed` conversation. Does nothing in any other mode. |
 | `open()`, `close()`, `toggle()` | Control the built-in widget's panel. |
 | `sessionId` | Deprecated alias of `visitorToken`. |

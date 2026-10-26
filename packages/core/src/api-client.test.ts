@@ -328,3 +328,59 @@ describe('ApiClient.uploadAttachment', () => {
     await expect(result).rejects.toMatchObject({ status: 400, message: 'Unsupported file type' });
   });
 });
+
+describe.each([
+  { method: 'closeConversation' as const, endpoint: 'conversation/close' },
+  { method: 'cancelHumanRequest' as const, endpoint: 'human-request/cancel' },
+])('ApiClient.$method', ({ method, endpoint }) => {
+  it('should post the visitor token and unwrap the ticket status when the request succeeds', async () => {
+    // Arrange
+    const bodies: unknown[] = [];
+    server.use(
+      http.post(sdkUrl(endpoint), async ({ request }) => {
+        bodies.push(await request.json());
+        return ok({ mode: 'closed', conversationId: 'c1' });
+      }),
+    );
+
+    // Act
+    const result = await client()[method]('sv_token');
+
+    // Assert
+    expect(result).toEqual({ mode: 'closed', conversationId: 'c1' });
+    expect(bodies).toEqual([{ visitorToken: 'sv_token' }]);
+  });
+
+  it.each([
+    { label: 'an unknown mode', data: { mode: 'gone' } },
+    { label: 'a missing mode', data: { conversationId: 'c1' } },
+    { label: 'a non-string conversation id', data: { mode: 'ai', conversationId: 7 } },
+    { label: 'no object at all', data: 'closed' },
+  ])('should reject with BAD_RESPONSE when the reply has $label', async ({ data }) => {
+    // Arrange
+    server.use(http.post(sdkUrl(endpoint), () => ok(data)));
+
+    // Act
+    const result = client()[method]('sv_token');
+
+    // Assert
+    await expect(result).rejects.toMatchObject({ apiError: { code: 'BAD_RESPONSE' } });
+  });
+
+  it('should surface the API error when the server rejects the visitor', async () => {
+    // Arrange
+    server.use(
+      http.post(sdkUrl(endpoint), () =>
+        HttpResponse.json(buildApiError({ statusCode: 401, message: 'Invalid visitor token' }), {
+          status: 401,
+        }),
+      ),
+    );
+
+    // Act
+    const result = client()[method]('sv_token');
+
+    // Assert
+    await expect(result).rejects.toMatchObject({ status: 401, message: 'Invalid visitor token' });
+  });
+});

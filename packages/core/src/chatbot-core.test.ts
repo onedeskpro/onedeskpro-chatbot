@@ -922,6 +922,338 @@ describe('ChatbotCore', () => {
     });
   });
 
+  describe('startNewConversation', () => {
+    /** Answer `/sdk/conversation/close` with `status` and record each request body. */
+    function useCloseConversation(status: TicketStatusData = buildTicketStatus({ mode: 'closed', conversationId: 'c1' })) {
+      const bodies: unknown[] = [];
+      server.use(
+        http.post(sdkUrl('conversation/close'), async ({ request }) => {
+          bodies.push(await request.json());
+          return ok(status);
+        }),
+      );
+      return bodies;
+    }
+
+    it('should end the conversation on the API and start an empty one in ai mode when the visitor is mid-chat', async () => {
+      // Arrange
+      const bodies = useCloseConversation();
+      const core = await initVerified();
+      await core.sendMessage('hi');
+      let resets = 0;
+      core.on('session-reset', () => {
+        resets += 1;
+      });
+
+      // Act
+      await core.startNewConversation();
+
+      // Assert
+      expect(bodies).toEqual([{ visitorToken: VISITOR_TOKEN }]);
+      expect(core.getState().messages).toHaveLength(0);
+      expect(core.getState().mode).toBe('ai');
+      expect(core.getState().isLoading).toBe(false);
+      expect(core.getState().visitorToken).toBe(VISITOR_TOKEN);
+      expect(resets).toBe(1);
+      core.destroy();
+    });
+
+    it.each(['waiting', 'human', 'closed'] as const)(
+      'should return to ai mode when started from %s',
+      async (mode) => {
+        // Arrange
+        useTicketStatus(buildTicketStatus({ mode, conversationId: 'c1', agentName: 'Ana' }));
+        useCloseConversation();
+        const core = await initVerified();
+        expect(core.getState().mode).toBe(mode);
+
+        // Act
+        await core.startNewConversation();
+
+        // Assert
+        expect(core.getState().mode).toBe('ai');
+        expect(widgetText()).not.toContain('Waiting for a human agent');
+        expect(widgetText()).not.toContain('Connected with Ana');
+        expect(widgetText()).not.toContain('This conversation is closed');
+        core.destroy();
+      },
+    );
+
+    it('should stay in ai mode when the ended conversation is pushed as closed mid-flight', async () => {
+      // Arrange: the API pushes `closed` over the socket while the close request is open.
+      const gate = deferred<void>();
+      server.use(
+        http.post(sdkUrl('conversation/close'), async () => {
+          await gate.promise;
+          return ok(buildTicketStatus({ mode: 'closed', conversationId: 'c1' }));
+        }),
+      );
+      const core = await initVerified();
+      await core.sendMessage('hi');
+
+      // Act
+      const starting = core.startNewConversation();
+      sockets[0].serverEmit('ticket:status', buildTicketStatus({ mode: 'closed', conversationId: 'c1' }));
+      gate.resolve();
+      await starting;
+
+      // Assert
+      expect(core.getState().mode).toBe('ai');
+      core.destroy();
+    });
+
+    it('should ignore the ended conversation when its closed status arrives after the reset', async () => {
+      // Arrange
+      useCloseConversation();
+      const core = await initVerified();
+      await core.sendMessage('hi');
+      await core.startNewConversation();
+      const statuses: TicketStatusData[] = [];
+      core.on('ticket-status', (s) => statuses.push(s));
+
+      // Act
+      sockets[0].serverEmit('ticket:status', buildTicketStatus({ mode: 'closed', conversationId: 'c1' }));
+
+      // Assert
+      expect(core.getState().mode).toBe('ai');
+      expect(statuses).toEqual([]);
+      core.destroy();
+    });
+
+    it('should ignore the ended conversation when the socket reconnects and restores its status', async () => {
+      // Arrange
+      useCloseConversation();
+      const core = await initVerified();
+      await core.sendMessage('hi');
+      await core.startNewConversation();
+      const restore = deferred<void>();
+      server.use(
+        http.get(sdkUrl('ticket-status'), () => {
+          restore.resolve();
+          return ok(buildTicketStatus({ mode: 'closed', conversationId: 'c1' }));
+        }),
+      );
+      let restored = 0;
+      core.on('ticket-status', () => {
+        restored += 1;
+      });
+
+      // Act: the first `connect` is the initial one; the second is a reconnect.
+      sockets[0].serverEmit('connect');
+      sockets[0].serverEmit('connect');
+      await restore.promise;
+      // Let the core read the response it was just sent.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Assert
+      expect(core.getState().mode).toBe('ai');
+      expect(restored).toBe(0);
+      core.destroy();
+    });
+
+    it('should apply a closed status again once the next message starts a new ticket', async () => {
+      // Arrange
+      useCloseConversation();
+      const core = await initVerified();
+      await core.sendMessage('hi');
+      await core.startNewConversation();
+      await core.sendMessage('a new question');
+
+      // Act: the same conversation id now belongs to the new ticket.
+      sockets[0].serverEmit('ticket:status', buildTicketStatus({ mode: 'closed', conversationId: 'c1' }));
+
+      // Assert
+      expect(core.getState().mode).toBe('closed');
+      core.destroy();
+    });
+
+    it('should keep the conversation and report the failure when the API rejects the close', async () => {
+      // Arrange
+      server.use(
+        http.post(sdkUrl('conversation/close'), () =>
+          HttpResponse.json({ statusCode: 500, message: 'boom', code: 'X' }, { status: 500 }),
+        ),
+      );
+      const core = await initVerified();
+      await core.sendMessage('hi');
+      const errors: Error[] = [];
+      core.on('error', (e) => errors.push(e));
+      let resets = 0;
+      core.on('session-reset', () => {
+        resets += 1;
+      });
+
+      // Act
+      await core.startNewConversation();
+
+      // Assert
+      expect(core.getState().messages.map((m) => m.message.content)).toEqual(['hi', 'AI reply']);
+      expect(core.getState().error).toBe('boom');
+      expect(core.getState().isLoading).toBe(false);
+      expect(errors.map((e) => e.message)).toEqual(['boom']);
+      expect(resets).toBe(0);
+      expect(widgetText()).toContain('Could not start a new conversation. Please try again.');
+      core.destroy();
+    });
+
+    it('should reject the reply when the API answers with an unexpected shape', async () => {
+      // Arrange
+      server.use(http.post(sdkUrl('conversation/close'), () => ok({ mode: 'gone' })));
+      const core = await initVerified();
+      await core.sendMessage('hi');
+
+      // Act
+      await core.startNewConversation();
+
+      // Assert
+      expect(core.getState().messages).toHaveLength(2);
+      expect(core.getState().error).toMatch(/unexpected ticket status/);
+      core.destroy();
+    });
+
+    it('should not call the API when the visitor has not identified', async () => {
+      // Arrange
+      const bodies = useCloseConversation();
+      const core = new ChatbotCore();
+      await core.init({ apiKey: 'k' });
+
+      // Act
+      await core.startNewConversation();
+
+      // Assert
+      expect(bodies).toEqual([]);
+      core.destroy();
+    });
+
+    it('should leave a destroyed instance alone when the close resolves after destroy', async () => {
+      // Arrange: hold the close open, so destroy() lands mid-flight.
+      const gate = deferred<void>();
+      server.use(
+        http.post(sdkUrl('conversation/close'), async () => {
+          await gate.promise;
+          return ok(buildTicketStatus({ mode: 'closed', conversationId: 'c1' }));
+        }),
+      );
+      const core = await initVerified();
+      await core.sendMessage('hi');
+      let resets = 0;
+      core.on('session-reset', () => {
+        resets += 1;
+      });
+
+      // Act
+      const starting = core.startNewConversation();
+      core.destroy();
+      gate.resolve();
+      await starting;
+
+      // Assert
+      expect(resets).toBe(0);
+      expect(core.getState().messages).toHaveLength(2);
+      expect(hostCount()).toBe(0);
+    });
+  });
+
+  describe('cancelHumanRequest', () => {
+    /** Answer `/sdk/human-request/cancel` with `status` and count the requests. */
+    function useCancel(status: TicketStatusData) {
+      const calls = { count: 0 };
+      server.use(
+        http.post(sdkUrl('human-request/cancel'), () => {
+          calls.count += 1;
+          return ok(status);
+        }),
+      );
+      return calls;
+    }
+
+    it('should hand the conversation back to the AI and emit events when the request is still waiting', async () => {
+      // Arrange
+      useTicketStatus(buildTicketStatus({ mode: 'waiting', conversationId: 'c1' }));
+      useCancel(buildTicketStatus({ mode: 'ai', conversationId: 'c1' }));
+      const core = await initVerified();
+      let cancelled = 0;
+      core.on('human-request-cancelled', () => {
+        cancelled += 1;
+      });
+      const statuses: TicketStatusData[] = [];
+      core.on('ticket-status', (s) => statuses.push(s));
+
+      // Act
+      await core.cancelHumanRequest();
+
+      // Assert
+      expect(core.getState().mode).toBe('ai');
+      expect(core.getState().isLoading).toBe(false);
+      expect(cancelled).toBe(1);
+      expect(statuses.map((s) => s.mode)).toEqual(['ai']);
+      expect(widgetText()).not.toContain('Waiting for a human agent');
+      core.destroy();
+    });
+
+    it('should show the agent and not announce a cancel when an agent accepted the request first', async () => {
+      // Arrange
+      useTicketStatus(buildTicketStatus({ mode: 'waiting', conversationId: 'c1' }));
+      useCancel(buildTicketStatus({ mode: 'human', conversationId: 'c1', agentName: 'Ana' }));
+      const core = await initVerified();
+      let cancelled = 0;
+      core.on('human-request-cancelled', () => {
+        cancelled += 1;
+      });
+
+      // Act
+      await core.cancelHumanRequest();
+
+      // Assert
+      expect(core.getState().mode).toBe('human');
+      expect(cancelled).toBe(0);
+      expect(widgetText()).toContain('Connected with Ana');
+      core.destroy();
+    });
+
+    it.each(['ai', 'human', 'closed'] as const)(
+      'should not call the API when the mode is %s',
+      async (mode) => {
+        // Arrange
+        useTicketStatus(buildTicketStatus({ mode, conversationId: 'c1' }));
+        const calls = useCancel(buildTicketStatus({ mode: 'ai', conversationId: 'c1' }));
+        const core = await initVerified();
+
+        // Act
+        await core.cancelHumanRequest();
+
+        // Assert
+        expect(calls.count).toBe(0);
+        expect(core.getState().mode).toBe(mode);
+        core.destroy();
+      },
+    );
+
+    it('should stay waiting and report the failure when the API rejects the cancel', async () => {
+      // Arrange
+      useTicketStatus(buildTicketStatus({ mode: 'waiting', conversationId: 'c1' }));
+      server.use(
+        http.post(sdkUrl('human-request/cancel'), () =>
+          HttpResponse.json({ statusCode: 400, message: 'No active conversation', code: 'validation_failed' }, { status: 400 }),
+        ),
+      );
+      const core = await initVerified();
+      const errors: Error[] = [];
+      core.on('error', (e) => errors.push(e));
+
+      // Act
+      await core.cancelHumanRequest();
+
+      // Assert
+      expect(core.getState().mode).toBe('waiting');
+      expect(core.getState().error).toBe('No active conversation');
+      expect(core.getState().isLoading).toBe(false);
+      expect(errors).toHaveLength(1);
+      expect(widgetText()).toContain('Could not cancel the request. Please try again.');
+      core.destroy();
+    });
+  });
+
   describe('ticket modes', () => {
     it('should refuse to send when the conversation is closed', async () => {
       // Arrange

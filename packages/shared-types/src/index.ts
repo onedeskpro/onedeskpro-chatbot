@@ -95,7 +95,10 @@ export interface ChatResponseData {
   mode: ChatbotTicketMode;
 }
 
-/** Shared shape for `POST /sdk/human-request`, `GET /sdk/ticket-status`, and `ticket:status`. */
+/**
+ * Shared shape for `POST /sdk/human-request`, `POST /sdk/human-request/cancel`,
+ * `POST /sdk/conversation/close`, `GET /sdk/ticket-status`, and `ticket:status`.
+ */
 export interface TicketStatusData {
   mode: ChatbotTicketMode;
   conversationId?: string;
@@ -158,10 +161,13 @@ export type ChatbotEventMap = {
   open: void;
   close: void;
   error: Error;
+  /** Fired when the chat is cleared for a new conversation (`resetSession` or `startNewConversation`). */
   'session-reset': void;
   ready: void;
   /** Fired after a successful `POST /sdk/human-request`. */
   'human-requested': void;
+  /** Fired when `cancelHumanRequest` handed the conversation back to the AI. */
+  'human-request-cancelled': void;
   /** Fired when ticket mode changes via REST restore or `/sdk` socket push. */
   'ticket-status': TicketStatusData;
 };

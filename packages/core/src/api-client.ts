@@ -49,6 +49,19 @@ function isUploadedAttachment(value: unknown): value is UploadAttachmentResponse
   );
 }
 
+const TICKET_MODES: readonly string[] = ['ai', 'waiting', 'human', 'closed'];
+
+function isTicketStatus(value: unknown): value is TicketStatusData {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.mode === 'string' &&
+    TICKET_MODES.includes(record.mode) &&
+    (record.conversationId === undefined || typeof record.conversationId === 'string') &&
+    (record.agentName === undefined || typeof record.agentName === 'string')
+  );
+}
+
 export function isChatbotRequestError(error: unknown): error is ChatbotRequestError {
   return (
     error instanceof Error &&
@@ -212,6 +225,27 @@ export class ApiClient {
 
   async requestHuman(visitorToken: string): Promise<TicketStatusData> {
     return this.request<TicketStatusData>('POST', '/sdk/human-request', { visitorToken });
+  }
+
+  /** Withdraws a pending human request; answers with the ticket's state afterwards. */
+  async cancelHumanRequest(visitorToken: string): Promise<TicketStatusData> {
+    return this.postTicketAction('/sdk/human-request/cancel', visitorToken);
+  }
+
+  /**
+   * Ends the visitor's conversation so the next message starts a new one. Answers with the
+   * ended conversation (`closed`), or `ai` when there was none.
+   */
+  async closeConversation(visitorToken: string): Promise<TicketStatusData> {
+    return this.postTicketAction('/sdk/conversation/close', visitorToken);
+  }
+
+  private async postTicketAction(path: string, visitorToken: string): Promise<TicketStatusData> {
+    const data = await this.request<unknown>('POST', path, { visitorToken });
+    if (!isTicketStatus(data)) {
+      this.fail('The server returned an unexpected ticket status.', 200, 'BAD_RESPONSE', path);
+    }
+    return data;
   }
 
   async fetchTicketStatus(visitorToken: string): Promise<TicketStatusData> {

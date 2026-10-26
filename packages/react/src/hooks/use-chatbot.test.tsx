@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildChatResponse } from '../../test/factories/chat.factory';
+import { buildChatResponse, buildTicketStatus } from '../../test/factories/chat.factory';
 import { seedVisitorToken } from '../../test/factories/visitor.factory';
 import { ok, sdkUrl } from '../../test/mocks/handlers';
 import { server } from '../../test/mocks/server';
@@ -35,6 +35,21 @@ function WithError() {
       <span role="status" aria-label="loading">{String(isLoading)}</span>
       <span role="alert">{error ?? ''}</span>
       <button onClick={() => void sendMessage('hi')}>send</button>
+    </div>
+  );
+}
+
+function ConversationControls() {
+  const { messages, mode, isReady, sendMessage, cancelHumanRequest, startNewConversation } =
+    useChatbot();
+  return (
+    <div>
+      <span role="status" aria-label="ready">{String(isReady)}</span>
+      <span role="status" aria-label="mode">{mode}</span>
+      <span role="status" aria-label="count">{messages.length}</span>
+      <button onClick={() => void sendMessage('hello')}>send</button>
+      <button onClick={() => void cancelHumanRequest()}>cancel request</button>
+      <button onClick={() => void startNewConversation()}>new conversation</button>
     </div>
   );
 }
@@ -132,5 +147,39 @@ describe('useChatbot', () => {
     // Assert
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('500'));
     expect(status('loading')).toHaveTextContent('false');
+  });
+
+  it('should clear the messages and return to ai when startNewConversation is called', async () => {
+    // Arrange
+    const user = userEvent.setup();
+    renderWithProvider(<ConversationControls />);
+    await waitFor(() => expect(status('ready')).toHaveTextContent('true'));
+    await user.click(screen.getByRole('button', { name: 'send' }));
+    await waitFor(() => expect(status('count')).toHaveTextContent('2'));
+
+    // Act
+    await user.click(screen.getByRole('button', { name: 'new conversation' }));
+
+    // Assert
+    await waitFor(() => expect(status('count')).toHaveTextContent('0'));
+    expect(status('mode')).toHaveTextContent('ai');
+  });
+
+  it('should hand back to the AI when cancelHumanRequest is called while waiting', async () => {
+    // Arrange
+    const user = userEvent.setup();
+    server.use(
+      http.get(sdkUrl('ticket-status'), () =>
+        ok(buildTicketStatus({ mode: 'waiting', conversationId: 'c1' })),
+      ),
+    );
+    renderWithProvider(<ConversationControls />);
+    await waitFor(() => expect(status('mode')).toHaveTextContent('waiting'));
+
+    // Act
+    await user.click(screen.getByRole('button', { name: 'cancel request' }));
+
+    // Assert
+    await waitFor(() => expect(status('mode')).toHaveTextContent('ai'));
   });
 });

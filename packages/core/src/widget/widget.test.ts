@@ -16,8 +16,9 @@ function mountWidget() {
     onIdentify: vi.fn(),
     onOpen: vi.fn(),
     onClose: vi.fn(),
-    onReset: vi.fn(),
+    onNewConversation: vi.fn(),
     onRequestHuman: vi.fn(),
+    onCancelHumanRequest: vi.fn(),
   };
   const widget = new ChatWidget(OPTIONS, callbacks);
   widget.readyToChat(OPTIONS);
@@ -82,8 +83,9 @@ describe('ChatWidget', () => {
       onIdentify: vi.fn(),
       onOpen: vi.fn(),
       onClose: vi.fn(),
-      onReset: vi.fn(),
+      onNewConversation: vi.fn(),
       onRequestHuman: vi.fn(),
+      onCancelHumanRequest: vi.fn(),
     });
     const host = () => document.getElementById('onedeskpro-chatbot-host');
 
@@ -326,6 +328,215 @@ describe('ChatWidget', () => {
       // Assert
       expect(fakes.tracks[0].stop).toHaveBeenCalled();
       expect(fakes.recorders[0].state).toBe('inactive');
+    });
+  });
+
+  describe('new conversation', () => {
+    /** A widget in chat with the panel open, in `mode`, where starting over is allowed. */
+    function inConversation(mode: 'ai' | 'waiting' | 'human' | 'closed' = 'ai') {
+      const handles = mountWidget();
+      handles.widget.open();
+      handles.widget.setMode(mode, { agentName: 'Ana', canStartNew: true });
+      const ui = within(handles.shadow as unknown as HTMLElement);
+      return {
+        ...handles,
+        ui,
+        newBtn: ui.getByRole('button', { name: 'New conversation' }),
+      };
+    }
+
+    it('should hide the button when nothing has been said yet', () => {
+      // Arrange
+      const { widget, shadow } = mountWidget();
+      widget.open();
+
+      // Act
+      widget.setMode('ai', { canStartNew: false });
+
+      // Assert
+      const ui = within(shadow as unknown as HTMLElement);
+      expect(ui.queryByRole('button', { name: 'New conversation' })).toBeNull();
+      widget.destroy();
+    });
+
+    it.each(['ai', 'waiting', 'human', 'closed'] as const)(
+      'should show the button when the conversation is %s',
+      (mode) => {
+        // Arrange / Act
+        const { widget, newBtn } = inConversation(mode);
+
+        // Assert
+        expect(newBtn).toBeVisible();
+        widget.destroy();
+      },
+    );
+
+    // user-event types into document.activeElement, which is the shadow host for a
+    // closed root, so keyboard input cannot reach these buttons in jsdom. They are
+    // native <button>s; Tab, Enter and Escape are checked in the demo instead.
+    it('should ask first, focus Keep chatting, and start over only after Start new', async () => {
+      // Arrange
+      const user = userEvent.setup();
+      const { widget, callbacks, ui, newBtn, shadow } = inConversation('ai');
+
+      // Act
+      await user.click(newBtn);
+      const confirm = ui.getByRole('group', { name: 'Start a new conversation' });
+      const keepChatting = ui.getByRole('button', { name: 'Keep chatting' });
+      await vi.waitFor(() => expect(shadow.activeElement).toBe(keepChatting));
+      expect(callbacks.onNewConversation).not.toHaveBeenCalled();
+      await user.click(ui.getByRole('button', { name: 'Start new' }));
+
+      // Assert
+      expect(confirm).toHaveTextContent('End this conversation and start a new one?');
+      expect(callbacks.onNewConversation).toHaveBeenCalledTimes(1);
+      expect(ui.queryByRole('group', { name: 'Start a new conversation' })).toBeNull();
+      widget.destroy();
+    });
+
+    it('should keep the conversation and refocus the button when Keep chatting is chosen', async () => {
+      // Arrange
+      const user = userEvent.setup();
+      const { widget, callbacks, ui, newBtn, shadow } = inConversation('waiting');
+      await user.click(newBtn);
+
+      // Act
+      await user.click(ui.getByRole('button', { name: 'Keep chatting' }));
+
+      // Assert
+      expect(ui.queryByRole('button', { name: 'Keep chatting' })).toBeNull();
+      expect(shadow.activeElement).toBe(newBtn);
+      expect(callbacks.onNewConversation).not.toHaveBeenCalled();
+      widget.destroy();
+    });
+
+    it('should start over without asking when the conversation is closed', async () => {
+      // Arrange
+      const user = userEvent.setup();
+      const { widget, callbacks, ui, newBtn } = inConversation('closed');
+
+      // Act
+      await user.click(newBtn);
+
+      // Assert
+      expect(callbacks.onNewConversation).toHaveBeenCalledTimes(1);
+      expect(ui.queryByRole('button', { name: 'Start new' })).toBeNull();
+      widget.destroy();
+    });
+
+    it('should mark the button unavailable and ignore it while a new conversation is starting', async () => {
+      // Arrange
+      const user = userEvent.setup();
+      const { widget, callbacks, ui, newBtn } = inConversation('closed');
+
+      // Act
+      widget.setActionPending(true);
+      await user.click(newBtn);
+
+      // Assert
+      expect(newBtn).toHaveAttribute('aria-disabled', 'true');
+      expect(callbacks.onNewConversation).not.toHaveBeenCalled();
+      expect(ui.queryByRole('button', { name: 'Start new' })).toBeNull();
+      widget.setActionPending(false);
+      expect(newBtn).toHaveAttribute('aria-disabled', 'false');
+      widget.destroy();
+    });
+
+    it('should move focus to the message input when the reset hides the focused button', async () => {
+      // Arrange
+      const user = userEvent.setup();
+      const { widget, newBtn, input, shadow } = inConversation('closed');
+      await user.click(newBtn);
+
+      // Act: what ChatbotCore does around the close request.
+      widget.setActionPending(true);
+      expect(shadow.activeElement).toBe(newBtn);
+      widget.clearMessages('Test');
+      widget.setMode('ai', { canStartNew: false });
+      widget.setActionPending(false);
+
+      // Assert
+      expect(newBtn).not.toBeVisible();
+      expect(shadow.activeElement).toBe(input);
+      widget.destroy();
+    });
+  });
+
+  describe('cancel human request', () => {
+    it('should offer Cancel request in the waiting banner and call back when it is pressed', async () => {
+      // Arrange
+      const user = userEvent.setup();
+      const { widget, callbacks, shadow } = mountWidget();
+      widget.open();
+      const ui = within(shadow as unknown as HTMLElement);
+
+      // Act
+      widget.setMode('waiting');
+      const cancel = ui.getByRole('button', { name: 'Cancel request' });
+      await user.click(cancel);
+
+      // Assert
+      expect(ui.getByRole('status')).toHaveTextContent('Waiting for a human agent…');
+      expect(cancel).toBeVisible();
+      expect(callbacks.onCancelHumanRequest).toHaveBeenCalledTimes(1);
+      widget.destroy();
+    });
+
+    it.each(['ai', 'human', 'closed'] as const)('should not offer Cancel request when the mode is %s', (mode) => {
+      // Arrange
+      const { widget, shadow } = mountWidget();
+      widget.open();
+      const ui = within(shadow as unknown as HTMLElement);
+
+      // Act
+      widget.setMode(mode, { agentName: 'Ana' });
+
+      // Assert
+      expect(ui.queryByRole('button', { name: 'Cancel request' })).toBeNull();
+      widget.destroy();
+    });
+
+    it('should mark Cancel request unavailable and ignore it while the cancel is in flight', async () => {
+      // Arrange
+      const user = userEvent.setup();
+      const { widget, callbacks, shadow } = mountWidget();
+      widget.open();
+      widget.setMode('waiting');
+      const cancel = within(shadow as unknown as HTMLElement).getByRole('button', {
+        name: 'Cancel request',
+      });
+
+      // Act
+      widget.setActionPending(true);
+      await user.click(cancel);
+
+      // Assert
+      expect(cancel).toHaveAttribute('aria-disabled', 'true');
+      expect(callbacks.onCancelHumanRequest).not.toHaveBeenCalled();
+      widget.destroy();
+    });
+
+    it('should move focus to the message input when the AI takes the conversation back', async () => {
+      // Arrange
+      const user = userEvent.setup();
+      const { widget, input, shadow } = mountWidget();
+      widget.open();
+      widget.setMode('waiting');
+      const cancel = within(shadow as unknown as HTMLElement).getByRole('button', {
+        name: 'Cancel request',
+      });
+      await user.click(cancel);
+
+      // Act: what ChatbotCore does around the cancel request.
+      widget.setActionPending(true);
+      expect(shadow.activeElement).toBe(cancel);
+      widget.setMode('ai', { canRequestHuman: true });
+      widget.setActionPending(false);
+
+      // Assert
+      expect(cancel).not.toBeVisible();
+      expect(shadow.activeElement).toBe(input);
+      widget.destroy();
     });
   });
 

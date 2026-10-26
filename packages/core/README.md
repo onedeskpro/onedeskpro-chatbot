@@ -71,9 +71,9 @@ Every conversation runs in one of four modes, exposed as `getState().mode`:
 | `ai` | The AI agent is answering. This is the default. |
 | `waiting` | A human was requested and no agent has picked the conversation up yet. |
 | `human` | A human agent is replying. Their messages arrive live with `type: 'agent'`. |
-| `closed` | The conversation was closed. Sending is disabled until `resetSession()`. |
+| `closed` | The conversation was closed. Sending is disabled until `startNewConversation()` or `resetSession()`. |
 
-The widget shows a "Request human agent" control once a conversation has started, and a banner for the `waiting`, `human`, and `closed` modes. From your own UI call `requestHuman()`. The mode also changes on its own — when the AI escalates, an agent takes over, hands back to the AI, or closes the conversation — so follow the `ticket-status` or `state-change` event rather than assuming the result of your own call.
+The widget shows a "Request human agent" control once a conversation has started, and a banner for the `waiting`, `human`, and `closed` modes. While `waiting`, the banner has a **Cancel request** button that hands the conversation back to the AI. The header's **New conversation** button ends the current conversation in any mode, after a confirmation unless it is already closed. From your own UI call `requestHuman()`, `cancelHumanRequest()`, and `startNewConversation()`. The mode also changes on its own — when the AI escalates, an agent takes over, hands back to the AI, or closes the conversation — so follow the `ticket-status` or `state-change` event rather than assuming the result of your own call.
 
 ### Script tag / CDN
 
@@ -100,6 +100,8 @@ The IIFE build exposes a `window.OnedeskProChatbot` global:
 | `sendAttachments(files, text?)` | Sends up to 10 files (10 MB each) as one media message, with `text` as the caption. Each file is uploaded through the API first; the message sits in `messages` with `pending: true` and local previews until then. Rejects if the visitor has not identified; a file over the limits sets `error` instead. |
 | `sendVoice(recording)` | Sends a voice note. `recording` is `{ blob, mimeType?, durationSeconds }`, as `VoiceRecorder` produces; it is re-encoded as mono WAV with a waveform where Web Audio allows, uploaded, and stored as a `voice` message. Rejects if the visitor has not identified. |
 | `requestHuman()` | Escalates the conversation to a human agent. Does nothing unless the mode is `ai` and a conversation has started. Returns a promise. |
+| `cancelHumanRequest()` | Withdraws a pending human request so the AI answers again. Does nothing unless the mode is `waiting`. If an agent accepted the conversation in the meantime, the mode moves to `human` instead. Returns a promise. |
+| `startNewConversation()` | Ends the current conversation in any mode and starts a fresh one: the API closes the open ticket and gives the AI a new memory, then `messages` is cleared and the mode returns to `ai`. Returns a promise. |
 | `open()` / `close()` / `toggle()` | Control widget visibility. |
 | `resetSession()` | Clears a `closed` conversation so the visitor can start a new one. Does nothing in any other mode. |
 | `getState()` | Returns a readonly `ChatbotState` snapshot. |
@@ -128,7 +130,7 @@ The IIFE build exposes a `window.OnedeskProChatbot` global:
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `isOpen` | `boolean` | The panel is showing. |
-| `isLoading` | `boolean` | A send, identify, or human request is in flight. |
+| `isLoading` | `boolean` | A send, identify, human request, cancel, or new conversation is in flight. |
 | `isReady` | `boolean` | The server answered and the agent can reply; the widget is on the page. |
 | `needsIdentify` | `boolean` | The visitor has not identified yet. |
 | `blockReason` | `ChatbotBlockReason` | Why the agent cannot answer, or `null`. See [When the widget appears](#when-the-widget-appears). |
@@ -148,8 +150,9 @@ The IIFE build exposes a `window.OnedeskProChatbot` global:
 | `open` / `close` | — | The panel is shown or hidden. |
 | `ticket-status` | `TicketStatusData` | The mode changed — on restore, after a send, or pushed live. |
 | `human-requested` | — | `requestHuman()` succeeded. |
-| `error` | `Error` | A send, identify, or human request failed (including on timeout), or the live connection could not be established. |
-| `session-reset` | — | A closed conversation was cleared. |
+| `human-request-cancelled` | — | `cancelHumanRequest()` handed the conversation back to the AI. |
+| `error` | `Error` | A send, identify, human request, cancel, or new conversation failed (including on timeout), or the live connection could not be established. |
+| `session-reset` | — | The chat was cleared for a new conversation (`startNewConversation()` or `resetSession()`). |
 
 Prefer `state-change` when you are mirroring state into your own UI — it is the only event that covers every transition.
 

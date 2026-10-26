@@ -49,8 +49,11 @@ export interface WidgetCallbacks {
   onIdentify: (payload: IdentifyRequest) => void;
   onOpen: () => void;
   onClose: () => void;
-  onReset: () => void;
+  /** The visitor confirmed ending this conversation to start a new one. */
+  onNewConversation: () => void;
   onRequestHuman: () => void;
+  /** The visitor withdrew a pending human-agent request. */
+  onCancelHumanRequest: () => void;
 }
 
 type PanelMode = 'form' | 'chat' | 'compact';
@@ -95,6 +98,14 @@ export class ChatWidget {
   private newSessionBtn!: HTMLButtonElement;
   private requestHumanBtn!: HTMLButtonElement;
   private modeBanner!: HTMLElement;
+  private modeBannerText!: HTMLElement;
+  private cancelHumanBtn!: HTMLButtonElement;
+  private confirmNewBar!: HTMLElement;
+  private confirmNewBtn!: HTMLButtonElement;
+  private keepChattingBtn!: HTMLButtonElement;
+  private confirmingNew = false;
+  private actionPending = false;
+  private ticketMode: ChatbotTicketMode = 'ai';
   private input!: HTMLInputElement;
   private sendBtn!: HTMLButtonElement;
   private attachBtn!: HTMLButtonElement;
@@ -189,8 +200,18 @@ export class ChatWidget {
 
     this.modeBanner = document.createElement('div');
     this.modeBanner.className = 'ttcb-mode-banner';
-    this.modeBanner.setAttribute('role', 'status');
+    // Only the text is a live region, so the Cancel button is not read out with it.
+    this.modeBannerText = document.createElement('span');
+    this.modeBannerText.className = 'ttcb-mode-banner-text';
+    this.modeBannerText.setAttribute('role', 'status');
+    this.cancelHumanBtn = this.buildBannerButton('Cancel request', () => {
+      if (!this.actionPending) this.callbacks.onCancelHumanRequest();
+    });
+    this.cancelHumanBtn.classList.add('hidden');
+    this.modeBanner.appendChild(this.modeBannerText);
+    this.modeBanner.appendChild(this.cancelHumanBtn);
     this.panel.appendChild(this.modeBanner);
+    this.panel.appendChild(this.buildConfirmNewBar());
 
     this.footer = document.createElement('div');
     this.footer.className = 'ttcb-footer';
@@ -268,6 +289,10 @@ export class ChatWidget {
         e.stopPropagation();
         this.closeAttachMenu();
         this.attachBtn.focus();
+      } else if (e.key === 'Escape' && this.confirmingNew) {
+        e.stopPropagation();
+        this.hideConfirmNew();
+        this.newSessionBtn.focus();
       }
     });
 
@@ -338,11 +363,17 @@ export class ChatWidget {
     this.requestHumanBtn.addEventListener('click', () => this.callbacks.onRequestHuman());
 
     this.newSessionBtn = document.createElement('button');
+    this.newSessionBtn.type = 'button';
     this.newSessionBtn.className = 'ttcb-new-session-btn hidden';
     this.newSessionBtn.setAttribute('aria-label', 'New conversation');
     this.newSessionBtn.title = 'New conversation';
     this.newSessionBtn.innerHTML = newSessionIcon();
-    this.newSessionBtn.addEventListener('click', () => this.callbacks.onReset());
+    this.newSessionBtn.addEventListener('click', () => {
+      if (this.actionPending) return;
+      // A closed conversation has nothing left to lose, so it skips the confirmation.
+      if (this.ticketMode === 'closed') this.callbacks.onNewConversation();
+      else this.showConfirmNew();
+    });
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'ttcb-close-btn';
@@ -358,6 +389,74 @@ export class ChatWidget {
     header.appendChild(main);
     header.appendChild(actions);
     return header;
+  }
+
+  /** A small text button for the mode banner and the confirmation bar. */
+  private buildBannerButton(label: string, onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ttcb-banner-btn';
+    btn.textContent = label;
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  /** "End this conversation and start a new one?" with Start new / Keep chatting. */
+  private buildConfirmNewBar(): HTMLElement {
+    this.confirmNewBar = document.createElement('div');
+    this.confirmNewBar.className = 'ttcb-confirm-bar';
+    this.confirmNewBar.setAttribute('role', 'group');
+    this.confirmNewBar.setAttribute('aria-label', 'Start a new conversation');
+
+    const text = document.createElement('span');
+    text.className = 'ttcb-confirm-text';
+    text.textContent = 'End this conversation and start a new one?';
+
+    this.confirmNewBtn = this.buildBannerButton('Start new', () => {
+      if (this.actionPending) return;
+      this.hideConfirmNew();
+      this.input.focus();
+      this.callbacks.onNewConversation();
+    });
+    this.confirmNewBtn.classList.add('primary');
+    this.keepChattingBtn = this.buildBannerButton('Keep chatting', () => {
+      this.hideConfirmNew();
+      this.newSessionBtn.focus();
+    });
+
+    // Grouped so the two choices wrap onto the next line together on a narrow panel.
+    const actions = document.createElement('div');
+    actions.className = 'ttcb-confirm-actions';
+    actions.appendChild(this.confirmNewBtn);
+    actions.appendChild(this.keepChattingBtn);
+
+    this.confirmNewBar.appendChild(text);
+    this.confirmNewBar.appendChild(actions);
+    return this.confirmNewBar;
+  }
+
+  private showConfirmNew(): void {
+    this.confirmingNew = true;
+    this.confirmNewBar.classList.add('visible');
+    // Start on the choice that loses nothing.
+    queueMicrotask(() => this.keepChattingBtn.focus());
+  }
+
+  private hideConfirmNew(): void {
+    this.confirmingNew = false;
+    this.confirmNewBar.classList.remove('visible');
+  }
+
+  /**
+   * Marks the new-conversation and cancel-request controls unavailable while one of them
+   * is in flight. `aria-disabled` rather than `disabled`: disabling the button that was
+   * just pressed would drop focus out of the dialog.
+   */
+  setActionPending(pending: boolean): void {
+    this.actionPending = pending;
+    for (const btn of [this.newSessionBtn, this.cancelHumanBtn, this.confirmNewBtn]) {
+      btn.setAttribute('aria-disabled', String(pending));
+    }
   }
 
   /** The "+" button, its Attachment / Photo menu, and the hidden file inputs behind them. */
@@ -675,6 +774,7 @@ export class ChatWidget {
     if (mode !== 'chat') {
       this.requestHumanBtn.classList.add('hidden');
       this.newSessionBtn.classList.add('hidden');
+      this.hideConfirmNew();
       this.hideModeBanner();
     }
   }
@@ -1220,27 +1320,33 @@ export class ChatWidget {
     this.messagesContainer.innerHTML = '';
     this.clearPendingFiles();
     this.showComposeError('');
+    this.hideConfirmNew();
     this.showEmptyState(name);
   }
 
   /**
    * Sync header controls, compose lock, and status banner with ticket mode.
-   * `canRequestHuman` is decided by ChatbotCore (`mode === 'ai' && hasActiveTicket`).
+   * `canRequestHuman` (`mode === 'ai' && hasActiveTicket`) and `canStartNew`
+   * (`mode === 'closed' || hasActiveTicket`) are decided by ChatbotCore.
    */
   setMode(
     mode: ChatbotTicketMode,
-    options?: { agentName?: string | null; canRequestHuman?: boolean },
+    options?: { agentName?: string | null; canRequestHuman?: boolean; canStartNew?: boolean },
   ): void {
     const inChat = this.panel.classList.contains('ttcb-mode-chat');
     const agentName = options?.agentName;
     const canRequestHuman = options?.canRequestHuman === true;
+    const canStartNew = options?.canStartNew ?? mode === 'closed';
 
     const showRequestHuman = inChat && canRequestHuman;
-    const showNewSession = inChat && mode === 'closed';
+    const showNewSession = inChat && canStartNew;
     const closed = mode === 'closed';
+    this.ticketMode = mode;
 
     this.requestHumanBtn.classList.toggle('hidden', !showRequestHuman);
     this.newSessionBtn.classList.toggle('hidden', !showNewSession);
+    // Closed needs no confirmation, and a hidden button has nothing to confirm.
+    if (!showNewSession || closed) this.hideConfirmNew();
 
     this.input.disabled = closed;
     if (closed) {
@@ -1259,6 +1365,7 @@ export class ChatWidget {
 
     if (!inChat) {
       this.hideModeBanner();
+      this.rescueFocus();
       return;
     }
 
@@ -1271,16 +1378,32 @@ export class ChatWidget {
     } else {
       this.hideModeBanner();
     }
+    this.rescueFocus();
   }
 
   private showModeBanner(text: string, kind: 'waiting' | 'human' | 'closed'): void {
-    this.modeBanner.textContent = text;
+    this.modeBannerText.textContent = text;
     this.modeBanner.className = `ttcb-mode-banner visible ${kind}`;
+    this.cancelHumanBtn.classList.toggle('hidden', kind !== 'waiting');
   }
 
   private hideModeBanner(): void {
-    this.modeBanner.textContent = '';
+    this.modeBannerText.textContent = '';
     this.modeBanner.className = 'ttcb-mode-banner';
+    this.cancelHumanBtn.classList.add('hidden');
+  }
+
+  /**
+   * A mode change can hide the control that has focus (Cancel request once the AI is
+   * back, New conversation after a reset). Move focus to the composer, or the panel,
+   * instead of letting it fall out of the dialog.
+   */
+  private rescueFocus(): void {
+    const active = this.shadow.activeElement;
+    if (!(active instanceof HTMLElement)) return;
+    if (!active.closest('.hidden') && !active.closest('.ttcb-mode-banner:not(.visible)')) return;
+    if (!this.input.disabled) this.input.focus();
+    else this.panel.focus({ preventScroll: true });
   }
 
   destroy(): void {

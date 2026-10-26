@@ -148,6 +148,13 @@ export class ChatbotCore {
   /** Server id of the last `message:receive` push rendered as an agent bubble. */
   private lastPushId: string | null = null;
   /**
+   * The conversation `startNewConversation` just ended. Its `closed` status — the
+   * socket push the close triggers, or a restore on reconnect — would put the
+   * fresh chat back into closed mode, so it is ignored until the next message
+   * starts a new ticket on that conversation.
+   */
+  private endedConversationId: string | null = null;
+  /**
    * Bumped by every init() and by destroy(). An async init compares the token it
    * started with against this before touching anything, so a superseded run — a
    * React StrictMode remount, or a caller re-initialising — quietly stands down
@@ -204,7 +211,17 @@ export class ChatbotCore {
     this.widget?.setMode(mode, {
       agentName,
       canRequestHuman: mode === 'ai' && this.hasActiveTicket,
+      canStartNew: mode === 'closed' || this.hasActiveTicket,
     });
+  }
+
+  /** True for the stale `closed` status of the conversation the visitor just ended. */
+  private isEndedConversation(status: TicketStatusData): boolean {
+    return (
+      status.mode === 'closed' &&
+      Boolean(status.conversationId) &&
+      status.conversationId === this.endedConversationId
+    );
   }
 
   async init(options: ChatbotInitOptions): Promise<void> {
@@ -230,6 +247,7 @@ export class ChatbotCore {
     });
 
     this.hasActiveTicket = false;
+    this.endedConversationId = null;
     this.setState({
       isReady: false,
       blockReason: null,
@@ -314,8 +332,9 @@ export class ChatbotCore {
         this.setState({ isOpen: false });
         this.emitter.emit('close');
       },
-      onReset: () => this.resetSession(),
+      onNewConversation: () => void this.startNewConversation(),
       onRequestHuman: () => void this.requestHuman(),
+      onCancelHumanRequest: () => void this.cancelHumanRequest(),
     });
   }
 
@@ -403,7 +422,7 @@ export class ChatbotCore {
   private async restoreTicketStatus(visitorToken: string, token: number): Promise<void> {
     try {
       const data = await this.apiClient.fetchTicketStatus(visitorToken);
-      if (token !== this.initToken) return;
+      if (token !== this.initToken || this.isEndedConversation(data)) return;
       this.applyMode(data.mode, data);
     } catch {
       // Stay on default `ai` if status is unavailable (new visitor / offline).
@@ -411,7 +430,7 @@ export class ChatbotCore {
   }
 
   private handleTicketStatus(payload: TicketStatusData): void {
-    if (!payload?.mode) return;
+    if (!payload?.mode || this.isEndedConversation(payload)) return;
     this.applyMode(payload.mode, payload);
   }
 
@@ -514,6 +533,78 @@ export class ChatbotCore {
     } finally {
       this.setState({ isLoading: false });
     }
+  }
+
+  /**
+   * Withdraws a pending human-agent request so the AI answers again. No-op unless the
+   * widget is in `waiting` mode. When an agent accepted the ticket in the meantime, the
+   * mode moves to `human` instead. Emits `human-request-cancelled` once the AI is back.
+   */
+  async cancelHumanRequest(): Promise<void> {
+    if (!this.apiClient || this._state.mode !== 'waiting' || this._state.isLoading) return;
+    const visitorToken = this.requireVisitorToken('cancelHumanRequest');
+
+    const token = this.initToken;
+    this.setState({ isLoading: true, error: null });
+    this.widget?.setActionPending(true);
+    this.widget?.showComposeError('');
+    try {
+      const data = await this.apiClient.cancelHumanRequest(visitorToken);
+      if (token !== this.initToken) return;
+      this.applyMode(data.mode, data);
+      if (data.mode === 'ai') this.emitter.emit('human-request-cancelled');
+    } catch (err) {
+      if (token !== this.initToken) return;
+      this.rejectAction(err, 'Could not cancel the request. Please try again.');
+    } finally {
+      if (token === this.initToken) {
+        this.setState({ isLoading: false });
+        this.widget?.setActionPending(false);
+      }
+    }
+  }
+
+  /**
+   * Ends the current conversation and starts a fresh one: the API closes the open ticket
+   * and gives the AI a new memory, then the chat is cleared and returns to `ai` mode.
+   * Emits `session-reset`. No-op until the visitor has identified, or while a request is
+   * in flight. Unlike `resetSession`, it works in every mode.
+   */
+  async startNewConversation(): Promise<void> {
+    if (!this.apiClient || !this._state.isReady || this._state.needsIdentify) return;
+    if (this._state.isLoading) return;
+    const visitorToken = this.requireVisitorToken('startNewConversation');
+
+    const token = this.initToken;
+    this.setState({ isLoading: true, error: null });
+    this.widget?.setActionPending(true);
+    this.widget?.showComposeError('');
+    try {
+      const ended = await this.apiClient.closeConversation(visitorToken);
+      if (token !== this.initToken) return;
+      this.endedConversationId = ended.mode === 'closed' ? (ended.conversationId ?? null) : null;
+      this.hasActiveTicket = false;
+      this.setState({ messages: [], error: null, mode: 'ai' });
+      this.widget?.clearMessages(this.options.chatbotName);
+      this.syncWidgetMode('ai');
+      this.emitter.emit('session-reset');
+    } catch (err) {
+      if (token !== this.initToken) return;
+      this.rejectAction(err, 'Could not start a new conversation. Please try again.');
+    } finally {
+      if (token === this.initToken) {
+        this.setState({ isLoading: false });
+        this.widget?.setActionPending(false);
+      }
+    }
+  }
+
+  /** Records a failed header/banner action: `state.error`, a visible notice, and `error`. */
+  private rejectAction(err: unknown, notice: string): void {
+    const error = err instanceof Error ? err : new Error(String(err));
+    this.setState({ error: error.message });
+    this.widget?.showComposeError(notice);
+    this.emitter.emit('error', error);
   }
 
   /** The visitor token every send needs; throws when the visitor has not identified. */
@@ -733,6 +824,7 @@ export class ChatbotCore {
 
       // Successful chat creates or continues a ticket episode.
       this.hasActiveTicket = true;
+      this.endedConversationId = null;
 
       const nextMode = response.mode ?? modeAtSend;
       const messages = [...this._state.messages];
