@@ -797,6 +797,105 @@ describe('ChatbotCore', () => {
     });
   });
 
+  // A Sales agent sends the photo of the Product it recommends in the `/sdk/chat`
+  // answer; in `ai` mode that answer is the only copy the widget renders.
+  describe('AI replies with files', () => {
+    const photo = {
+      type: 'image/jpeg',
+      url: 'https://cdn.example.com/products/jacket.jpg',
+      fileName: 'jacket.jpg',
+    };
+
+    it('should show the photo with the text when the AI reply carries an attachment', async () => {
+      // Arrange
+      useChatReply({ text: 'The Leather jacket is on sale.', attachments: [photo] });
+      const core = await initVerified();
+
+      // Act
+      await core.sendMessage('any jackets?');
+
+      // Assert
+      const reply = core.getState().messages[1];
+      expect(reply.message).toEqual({
+        type: 'ai',
+        content: 'The Leather jacket is on sale.',
+        attachments: [{ ...photo, size: 0 }],
+      });
+      expect(widgetRoot().querySelector('img')?.getAttribute('src')).toBe(photo.url);
+      expect(widgetText()).toContain('The Leather jacket is on sale.');
+      core.destroy();
+    });
+
+    it('should leave attachments off the AI message when the reply has none', async () => {
+      // Arrange
+      useChatReply({ text: 'Hello there' });
+      const core = await initVerified();
+
+      // Act
+      await core.sendMessage('hi');
+
+      // Assert
+      expect(core.getState().messages[1].message).toEqual({ type: 'ai', content: 'Hello there' });
+      expect(widgetRoot().querySelector('img')).toBeNull();
+      core.destroy();
+    });
+
+    it('should drop an attachment whose url is not http(s)', async () => {
+      // Arrange
+      useChatReply({ text: 'Here it is', attachments: [{ ...photo, url: 'javascript:alert(1)' }] });
+      const core = await initVerified();
+
+      // Act
+      await core.sendMessage('show me');
+
+      // Assert
+      expect(core.getState().messages[1].message).toEqual({ type: 'ai', content: 'Here it is' });
+      expect(widgetRoot().querySelector('img')).toBeNull();
+      core.destroy();
+    });
+
+    // The agent's push lands while the visitor's message is still in flight, so it
+    // is the last bubble when the HTTP answer arrives.
+    async function replyAfterAgentPush(agentPhotoUrl: string) {
+      useTicketStatus(buildTicketStatus({ mode: 'human', agentName: 'Ana' }));
+      const release = deferred<void>();
+      server.use(
+        http.post(sdkUrl('chat'), async () => {
+          await release.promise;
+          return ok(buildChatResponse({ text: 'Image', mode: 'ai', attachments: [photo] }));
+        }),
+      );
+      const core = await initVerified();
+      const sending = core.sendMessage('show me');
+      sockets[0].serverEmit('message:receive', {
+        id: 'm1',
+        textMessage: 'Image',
+        attachments: [buildAttachment({ url: agentPhotoUrl })],
+      });
+      release.resolve();
+      await sending;
+      return core;
+    }
+
+    it('should keep the AI reply when the last bubble has the same text with a different photo', async () => {
+      // Arrange + Act
+      const core = await replyAfterAgentPush('https://cdn.example.com/other.png');
+
+      // Assert
+      expect(core.getState().messages.map((m) => m.message.type)).toEqual(['human', 'agent', 'ai']);
+      core.destroy();
+    });
+
+    it('should drop the AI reply when the last bubble has the same text and photo', async () => {
+      // Arrange + Act
+      const core = await replyAfterAgentPush(photo.url);
+
+      // Assert
+      expect(core.getState().messages.map((m) => m.message.type)).toEqual(['human', 'agent']);
+      core.destroy();
+    });
+  });
+
   describe('getState', () => {
     it('should not mutate a snapshot when state changes after it was taken', async () => {
       // Arrange

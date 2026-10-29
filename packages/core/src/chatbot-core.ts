@@ -829,6 +829,7 @@ export class ChatbotCore {
       const nextMode = response.mode ?? modeAtSend;
       const messages = [...this._state.messages];
       const reply = (response.text ?? '').trim();
+      const attachments = extractAttachments(response);
 
       // Prefer server mode immediately (e.g. dashboard handed the ticket back to AI
       // while the widget still showed "Connected with …").
@@ -842,16 +843,21 @@ export class ChatbotCore {
       // includes the reply that hands over to a human or closes the conversation.
       // While a human owns the episode the text is empty and replies arrive as
       // `message:receive` agent bubbles, so there is nothing to double-render.
-      if (reply) {
+      // Files the AI sent (a Sales agent's Product photo) share the reply's bubble.
+      if (reply || attachments.length > 0) {
         const last = messages[messages.length - 1];
         const duplicate =
           (last?.message.type === 'agent' || last?.message.type === 'ai') &&
-          last.message.content === reply;
+          messageKey(last.message) === messageKey({ content: reply, attachments });
         if (!duplicate) {
           const aiMsg: ChatMessage = {
             id: localMessageId(),
             sessionId: response.sessionId,
-            message: { type: 'ai', content: reply },
+            message: {
+              type: 'ai',
+              content: reply,
+              ...(attachments.length > 0 ? { attachments } : {}),
+            },
           };
           messages.push(aiMsg);
           this.widget?.appendMessage(aiMsg);
