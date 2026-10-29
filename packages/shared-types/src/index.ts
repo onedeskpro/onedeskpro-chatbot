@@ -90,9 +90,15 @@ export type UploadAttachmentResponseData = ChatAttachment;
 export type ChatbotTicketMode = 'ai' | 'waiting' | 'human' | 'closed';
 
 export interface ChatResponseData {
+  /** Every text the AI sent for this message, in order, separated by a blank line. */
   text: string;
   sessionId: string;
   mode: ChatbotTicketMode;
+  /**
+   * Files the AI sent with `text`, e.g. the photo of a Product an agent with the Sales
+   * ability recommends. Absent when there are none. The API does not send `size`.
+   */
+  attachments?: Pick<ChatAttachment, 'type' | 'url' | 'fileName'>[];
 }
 
 /**
